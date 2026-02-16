@@ -30,4 +30,20 @@ dev:
 
 # 運行 Agent (參數: URL QUERY)
 run url query='這個網頁在做什麼？':
-    bun src/index.ts {{url}} "{{query}}"
+    USE_SESSION=false HEADLESS=true bun src/index.ts {{url}} "{{query}}"
+
+# 運行 Agent (有畫面模式)
+gui url query='這個網頁在做什麼？':
+    USE_SESSION=false HEADLESS=false bun src/index.ts {{url}} "{{query}}"
+
+# 手動登入模式 (參數: URL)
+login url='https://discord.com/login':
+    USE_SESSION=true HEADLESS=false LOGIN_MODE=true bun src/index.ts {{url}}
+
+# 使用現有 Session 運行 (參數: GOAL)
+auth-run goal:
+    USE_SESSION=true HEADLESS=true LOGIN_MODE=false bun src/index.ts "{{goal}}"
+
+# 使用現有 Session 運行 (有畫面模式)
+auth-gui goal:
+    USE_SESSION=true HEADLESS=false LOGIN_MODE=false bun src/index.ts "{{goal}}"

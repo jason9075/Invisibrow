@@ -41,5 +41,8 @@ result
 # Puppeteer/Browser specific
 cookies.json
 screenshots/
+debug_screenshots/
+user_data/
 
+# Temporary files
 tmp/

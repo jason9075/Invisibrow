@@ -40,7 +40,11 @@ just run https://news.ycombinator.com "有哪些關於 AI 的新聞？"
 | 指令 | 說明 |
 | :--- | :--- |
 | `just init` | 安裝專案依賴 (`bun install`) |
-| `just run <url> [query]` | 啟動 Agent 分析指定網頁 |
+| `just run <url> [query]` | 啟動 Agent 分析指定網頁 (無畫面，獨立 Session) |
+| `just gui <url> [query]` | 啟動 Agent 並顯示瀏覽器畫面 (獨立 Session) |
+| `just login [url]` | 手動登入模式 (開啟瀏覽器供您操作，按 Enter 儲存) |
+| `just auth-run <goal>` | 使用儲存的 Session 執行任務 (無畫面) |
+| `just auth-gui <goal>` | 使用儲存的 Session 執行任務 (有畫面) |
 | `just lint` | 執行程式碼檢查 (Biome) |
 | `just fmt` | 自動格式化程式碼 |
 | `just test` | 執行單元測試 |
