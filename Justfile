@@ -4,6 +4,18 @@ set shell := ["bash", "-cu"]
 init:
     bun install
 
+# 啟動 TUI 管理平台
+start:
+    bun src/index.tsx
+
+# 啟動 UI 測試模式 (Fake Tasks)
+test-ui:
+    UI_TEST=true bun src/index.tsx
+
+# 新增任務 (CLI 接口)
+add-task session goal:
+    curl -X POST http://localhost:3000/tasks -d '{"session": "{{session}}", "goal": "{{goal}}"}'
+
 # 執行程式碼檢查
 lint:
     bun x biome check .
@@ -12,38 +24,10 @@ lint:
 fmt:
     bun x biome format --write .
 
-# 執行所有測試
+# 執行測試
 test:
     bun test
 
-# 執行特定測試檔案
-test-file file:
-    bun test {{file}}
-
 # 建置專案
 build:
-    bun build ./src/index.ts --outdir ./dist
-
-# 執行開發模式
-dev:
-    bun --watch src/index.ts
-
-# 運行 Agent (參數: URL QUERY)
-run url query='這個網頁在做什麼？':
-    USE_SESSION=false HEADLESS=true bun src/index.ts {{url}} "{{query}}"
-
-# 運行 Agent (有畫面模式)
-gui url query='這個網頁在做什麼？':
-    USE_SESSION=false HEADLESS=false bun src/index.ts {{url}} "{{query}}"
-
-# 手動登入模式 (參數: URL)
-login url='https://discord.com/login':
-    USE_SESSION=true HEADLESS=false LOGIN_MODE=true bun src/index.ts {{url}}
-
-# 使用現有 Session 運行 (參數: GOAL)
-auth-run goal:
-    USE_SESSION=true HEADLESS=true LOGIN_MODE=false bun src/index.ts "{{goal}}"
-
-# 使用現有 Session 運行 (有畫面模式)
-auth-gui goal:
-    USE_SESSION=true HEADLESS=false LOGIN_MODE=false bun src/index.ts "{{goal}}"
+    bun build ./src/index.tsx --outdir ./dist --target node
