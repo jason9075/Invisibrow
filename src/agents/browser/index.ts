@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { log, eventBus } from '../../utils/logger';
 import { BrowserManager } from '../../core/browser';
 import type { IAgent, AgentResponse } from '../../core/types';
-import { AuditorAgent } from '../auditor';
+import { WatchdogAgent } from '../watchdog';
 
 const ActionSchema = z.object({
   thought: z.string(),
@@ -35,7 +35,7 @@ export class BrowserAgent implements IAgent<string, { answer: string; url: strin
 
   private openai: OpenAI;
   private browserMgr: BrowserManager;
-  private auditor: AuditorAgent;
+  private watchdog: WatchdogAgent;
   public sessionId: string;
 
   constructor(sessionId: string, headless: boolean = true) {
@@ -44,7 +44,7 @@ export class BrowserAgent implements IAgent<string, { answer: string; url: strin
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
-    this.auditor = new AuditorAgent();
+    this.watchdog = new WatchdogAgent();
   }
 
   async execute(taskId: string, goal: string): Promise<AgentResponse<{ answer: string; url: string }>> {
@@ -83,18 +83,18 @@ export class BrowserAgent implements IAgent<string, { answer: string; url: strin
       currentStep++;
       const state = await this.getPageState();
 
-      // 每 3 步進行一次審計，或者在檢測到機器人時
+      // 每 3 步進行一次監控，或者在檢測到機器人時
       if (currentStep % 3 === 0) {
-        log(`[${this.sessionId}] [${taskId}] 執行流程審計...`);
-        const auditRes = await this.auditor.execute(taskId, {
+        log(`[${this.sessionId}] [${taskId}] 執行 Watchdog 監控...`);
+        const watchdogRes = await this.watchdog.execute(taskId, {
           goal,
           state,
           history
         });
 
-        if (auditRes.status === 'intervention') {
-          log(`[${this.sessionId}] [${taskId}] 審計建議介入: ${auditRes.data.reason}`, 'warn');
-          // 如果審計發現卡住或需要介入，可以在這裡處理，目前先記錄
+        if (watchdogRes.status === 'intervention') {
+          log(`[${this.sessionId}] [${taskId}] Watchdog 建議介入: ${watchdogRes.data.reason}`, 'warn');
+          // 如果監控發現卡住或需要介入，目前先記錄
         }
       }
 

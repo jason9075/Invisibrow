@@ -1,48 +1,35 @@
 # Invisibrow TUI 管理平台開發指南
 
-本文件為 Agent（如 Opencode）提供「長駐式 TUI 管理平台」的開發規範。
+本文件為 Agent 提供「Invisibrow 長駐式 TUI 管理平台」的開發規範與架構說明。
 
 ## 1. 架構規範 (Architecture)
 
-### 多會話隔離 (Multi-session)
-- 每個 Session 必須擁有獨立的 `userDataDir`。
-- 路徑格式：`./user_data/session_<id>`。
+### A2A (Agent-to-Agent) 整合
+- 遵循 A2A 標準實作 `IAgent` 介面。
+- 每個 Agent 必須包含 `AgentCard` (名稱、版本、技能描述)。
+- `execute(taskId, input)` 回傳統一的 `AgentResponse` 格式。
 
-### 任務隊列與併發 (Queue & Concurrency)
-- 使用 `p-queue` 實作生產者-消費者模型。
-- **預設併發數**: 2。
-- 任務狀態流轉：`pending` -> `running` -> `completed` | `failed`。
+### 多會話與持久化 (Session & Persistence)
+- 每個 Session 擁有獨立的 `userDataDir`: `./user_data/session_<id>`。
+- 數據儲存於 `~/.local/share/invisibrow/storage/` (`sessions.json`, `tasks.json`)。
 
-### TUI 渲染 (UI Layer)
-- 使用 **Ink (React for CLI)** 進行介面開發。
-- 必須包含：
-  - **Sidebar**: Session 列表 (Online/Offline)。
-  - **Main Panel**: 任務進度與狀態。
-  - **Log View**: 脫敏後的執行日誌。
+### 任務隊列 (Queue Engine)
+- 使用 `p-queue` 實作，預設併發數 2。
+- 支援 `WatchdogAgent` 協同作業：自動監控 `BrowserAgent` 流程，偵測死循環或需要人工介入 (CAPTCHA) 的狀況。
 
-## 2. 核心指令 (Justfile)
+## 3. 目錄結構
 
-| 指令 | 說明 |
-| :--- | :--- |
-| `just init` | 安裝依賴 |
-| `just start` | 啟動 TUI 管理平台 |
-| `just add-task <session> <goal>` | 透過 CLI 新增任務到運行中的平台 |
-| `just build` | 建置專案 |
+- `src/core/`: 核心邏輯 (`types.ts` 定義 A2A, `browser.ts` 處理 Puppeteer, `queue.ts` 任務調度)。
+- `src/agents/`:
+  - `browser/`: 自主瀏覽 Agent。
+  - `watchdog/`: 流程監控 Agent (負責監控 BrowserAgent)。
 
-## 3. 程式碼風格與結構
+- `src/tui/`: `BlessedApp.ts` 介面邏輯。
+- `src/utils/`: `clipboard.ts` (OSC 52), `logger.ts`, `config.ts`。
 
-### 命名慣例
-- 核心組件：`PascalCase` (e.g., `SessionManager`, `TaskRunner`)。
-- TUI 組件：`PascalCase` (e.g., `LogView`, `App`)。
-
-### 目錄結構
-- `src/core/`: 核心邏輯 (Agent, Queue, Session)。
-- `src/tui/`: 介面組件。
-- `src/utils/`: Logger, Config。
-
-## 4. 安全與日誌
-- 嚴格脫敏：禁止在 TUI 顯示密碼或 Token。
-- 使用 `winston` 紀錄日誌，TUI 訂閱事件更新畫面。
+## 4. 安全與隱私
+- 嚴格脫敏：禁止在 TUI 顯示敏感 Token。
+- 驗證碼處理：優先引導使用者透過實體瀏覽器排除。
 
 ---
-*Last Updated: 2026-02-16*
+*Last Updated: 2026-02-17*

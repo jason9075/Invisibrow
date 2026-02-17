@@ -13,6 +13,7 @@ export interface AgentTask {
   url?: string;
   error?: string;
   createdAt: string;
+  completedAt?: string;
 }
 
 export interface SessionConfig {
@@ -108,9 +109,11 @@ export class QueueEngine {
           }
         }
         task.status = 'completed';
+        task.completedAt = new Date().toISOString();
         log(`[Queue] 任務 ${taskId} 完成`);
       } catch (error: any) {
         task.status = 'failed';
+        task.completedAt = new Date().toISOString();
         task.error = error.message;
         log(`[Queue] 任務 ${taskId} 失敗: ${error.message}`, 'error');
       } finally {

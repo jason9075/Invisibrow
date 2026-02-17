@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { getConfig } from '../../utils/config';
 import type { IAgent, AgentResponse, AgentCard } from '../../core/types';
 
-export interface AuditInput {
+export interface WatchdogInput {
   goal: string;
   state: {
     url: string;
@@ -12,22 +12,22 @@ export interface AuditInput {
   history: string[];
 }
 
-export interface AuditOutput {
+export interface WatchdogOutput {
   isStuck: boolean;
   needsIntervention: boolean;
   reason: string;
 }
 
-export class AuditorAgent implements IAgent<AuditInput, AuditOutput> {
+export class WatchdogAgent implements IAgent<WatchdogInput, WatchdogOutput> {
   readonly card: AgentCard = {
-    name: 'Auditor Agent',
-    description: '審計瀏覽器 Agent 的流程是否卡住或需要介入',
+    name: 'Watchdog Agent',
+    description: '監控瀏覽器 Agent 的執行狀態，防止死循環並偵測需要人工介入的時機',
     version: '1.0.0',
     skills: [
       {
-        id: 'process_audit',
-        name: 'Process Audit',
-        description: '分析瀏覽器狀態與歷史紀錄以判斷任務進度'
+        id: 'execution_watchdog',
+        name: 'Execution Watchdog',
+        description: '監控自動化流程並確保其持續朝向目標前進'
       }
     ]
   };
@@ -37,13 +37,13 @@ export class AuditorAgent implements IAgent<AuditInput, AuditOutput> {
 
   constructor() {
     const config = getConfig();
-    this.model = config.models.auditorAgent;
+    this.model = config.models.watchdogAgent;
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
   }
 
-  async execute(taskId: string, input: AuditInput): Promise<AgentResponse<AuditOutput>> {
+  async execute(taskId: string, input: WatchdogInput): Promise<AgentResponse<WatchdogOutput>> {
     const { goal, state, history } = input;
 
     try {
@@ -52,7 +52,7 @@ export class AuditorAgent implements IAgent<AuditInput, AuditOutput> {
         messages: [
           {
             role: 'system',
-            content: `你是一個流程審計專員。你的任務是觀察一個瀏覽器自動化 Agent 的狀態，判斷它是否遇到了問題。
+            content: `你是一個 Watchdog 監控專員。你的任務是觀察一個瀏覽器自動化 Agent 的狀態，確保它沒有卡住或陷入死循環。
 目標：${goal}
 
 請分析以下狀況並判斷：
@@ -81,9 +81,9 @@ export class AuditorAgent implements IAgent<AuditInput, AuditOutput> {
       });
 
       const content = response.choices[0]?.message.content;
-      if (!content) throw new Error('Auditor Agent returned empty response');
+      if (!content) throw new Error('Watchdog Agent returned empty response');
       
-      const data = JSON.parse(content) as AuditOutput;
+      const data = JSON.parse(content) as WatchdogOutput;
       return {
         status: (data.isStuck || data.needsIntervention) ? 'intervention' : 'success',
         data

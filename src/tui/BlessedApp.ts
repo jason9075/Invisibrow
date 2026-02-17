@@ -8,8 +8,14 @@ import { copyToClipboard, openUrl } from '../utils/clipboard';
 type UIMode = 'normal' | 'options' | 'execute' | 'rename' | 'verify';
 
 interface PersistedSession extends SessionConfig {
+  createdAt: string;
   updatedAt: string;
   isVerifying?: boolean;
+  stats?: {
+    tokens: number;
+    cost: number;
+    contextSize: number;
+  };
 }
 
 export class BlessedUI {
@@ -27,6 +33,7 @@ export class BlessedUI {
   // Layout Components
   private header: blessed.Widgets.BoxElement;
   private sidebar: blessed.Widgets.ListElement;
+  private taskInfoArea: blessed.Widgets.BoxElement;
   private taskArea: blessed.Widgets.ListElement;
   private logArea: blessed.Widgets.BoxElement;
   private commandBar: blessed.Widgets.BoxElement;
@@ -53,6 +60,7 @@ export class BlessedUI {
     const commandBarHeight = 3;
     const logHeight = 6;
     const sidebarWidth = 40;
+    const infoHeight = 4;
 
     // 1. Header
     this.header = blessed.box({
@@ -77,28 +85,46 @@ export class BlessedUI {
         border: { fg: 'cyan' },
         selected: { bg: 'cyan', fg: 'black' }
       },
-      tags: true, // Enable tags for styling headers
+      tags: true,
       keys: false,
       vi: false
     });
 
-    // 3. Task Area
-    this.taskArea = blessed.list({
+    // 3a. Task Info Area (Fixed at top of task area)
+    this.taskInfoArea = blessed.box({
       parent: this.screen,
       top: headerHeight,
       left: sidebarWidth,
       width: `100%-${sidebarWidth}`,
-      height: `100%-${headerHeight + logHeight + commandBarHeight}`,
+      height: infoHeight,
+      label: ' SESSION INFO ',
+      border: { type: 'line' },
+      style: { border: { fg: 'gray' } },
+      tags: true
+    });
+
+    // 3b. Task Area
+    this.taskArea = blessed.list({
+      parent: this.screen,
+      top: headerHeight + infoHeight,
+      left: sidebarWidth,
+      width: `100%-${sidebarWidth}`,
+      height: `100%-${headerHeight + infoHeight + logHeight + commandBarHeight}`,
       label: ' TASKS ',
       border: { type: 'line' },
       style: {
-        border: { fg: 'white' },
+        border: { fg: 'gray' },
         selected: { bg: 'blue', fg: 'white' }
       },
       tags: true,
       keys: false,
       vi: false,
-      mouse: true
+      mouse: true,
+      scrollbar: {
+        ch: ' ',
+        track: { bg: 'gray' },
+        style: { inverse: true }
+      }
     });
 
     // 4. Log Area
@@ -207,8 +233,10 @@ export class BlessedUI {
 
       // NORMAL MODE
       if (this.mode === 'normal') {
-        if (key.name === 'tab') {
-          this.focusPane = this.focusPane === 'sidebar' ? 'tasks' : 'sidebar';
+        if (key.name === 'tab' || key.name === 'l' || key.name === 'h') {
+          if (key.name === 'l') this.focusPane = 'tasks';
+          else if (key.name === 'h') this.focusPane = 'sidebar';
+          else this.focusPane = this.focusPane === 'sidebar' ? 'tasks' : 'sidebar';
           this.updateUI();
           return;
         }
@@ -234,16 +262,14 @@ export class BlessedUI {
           const tasks = this.queueEngine.getTasks().filter(t => t.sessionId === currentSession?.id);
           
           if (key.name === 'j' || key.name === 'down') {
-            if (this.selectedTaskIdx < tasks.length - 1) {
-              this.selectedTaskIdx++;
-              this.updateUI();
-            }
+            const step = key.shift ? 5 : 1;
+            this.selectedTaskIdx = Math.min(tasks.length - 1, this.selectedTaskIdx + step);
+            this.updateUI();
           }
           if (key.name === 'k' || key.name === 'up') {
-            if (this.selectedTaskIdx > 0) {
-              this.selectedTaskIdx--;
-              this.updateUI();
-            }
+            const step = key.shift ? 5 : 1;
+            this.selectedTaskIdx = Math.max(0, this.selectedTaskIdx - step);
+            this.updateUI();
           }
           if (key.name === 'y') {
             const task = tasks[this.selectedTaskIdx];
@@ -306,12 +332,28 @@ export class BlessedUI {
         if (this.mode === 'execute') {
           log(`[TUI] Submitting goal for ${s.name}: ${value}`);
           s.updatedAt = new Date().toISOString();
+          
+          // Store the session ID to re-locate it after sorting
+          const targetId = s.id;
+          
           this.saveSessions();
+          
+          // Trigger UI update (which includes sorting)
+          this.updateUI();
+          
+          // Re-locate the selected index based on the ID after sorting
+          const newIdx = this.sessions.findIndex(sess => sess.id === targetId);
+          if (newIdx !== -1) {
+            this.selectedSessionIdx = newIdx;
+            this.selectedTaskIdx = 0;
+            this.updateUI(); // Render again with new selection
+          }
+          
           this.queueEngine.addTask(s.id, value);
         } else if (this.mode === 'rename') {
           const oldName = s.name;
           s.name = value;
-          s.updatedAt = new Date().toISOString();
+          // Renaming is metadata update, not necessarily "execution"
           this.saveSessions();
           log(`[TUI] Renamed session ${s.id}: ${oldName} -> ${value}`);
         }
@@ -373,17 +415,19 @@ export class BlessedUI {
   }
 
   private createNewSession() {
-    const now = new Date().toLocaleTimeString();
+    const nowStr = new Date().toLocaleTimeString();
     const newId = Math.random().toString(36).substring(7);
+    const nowIso = new Date().toISOString();
     const newSession: PersistedSession = { 
       id: newId, 
-      name: `Session - ${now}`, 
+      name: `Session - ${nowStr}`, 
       headless: false,
-      updatedAt: new Date().toISOString()
+      createdAt: nowIso,
+      updatedAt: nowIso
     };
     this.sessions.push(newSession);
     this.saveSessions();
-    log(`[TUI] Created new session: ${newId}`);
+    log(`[TUI] Created new session: ${newSession.name} (${newId})`);
     this.updateUI();
   }
 
@@ -404,21 +448,25 @@ export class BlessedUI {
         const data = fs.readFileSync(this.sessionsFilePath, 'utf8');
         this.sessions = JSON.parse(data);
       } else {
+        const now = new Date().toISOString();
         this.sessions = [{ 
           id: 'default', 
           name: 'Default Session', 
           headless: true,
-          updatedAt: new Date().toISOString()
+          createdAt: now,
+          updatedAt: now
         }];
         this.saveSessions();
       }
     } catch (e) {
       log(`[TUI] Failed to load sessions: ${e}`, 'error');
+      const now = new Date().toISOString();
       this.sessions = [{ 
         id: 'default', 
         name: 'Default Session', 
         headless: true,
-        updatedAt: new Date().toISOString()
+        createdAt: now,
+        updatedAt: now
       }];
     }
   }
@@ -460,24 +508,24 @@ export class BlessedUI {
     if (todaySessions.length > 0) {
       sidebarItems.push('{center}{yellow-fg}--- TODAY ---{/}{/}');
       todaySessions.forEach(s => {
-      const prefix = sessionCount === this.selectedSessionIdx ? '▶ ' : '  ';
-      const mode = s.headless ? '(H)' : '(G)';
-      const verifyTag = s.isVerifying ? ' {red-bg}{white-fg}[VERIFY]{/}' : '';
-      sidebarItems.push(`${prefix}${s.name.padEnd(25).substring(0, 25)} ${mode}${verifyTag}`);
-      sessionCount++;
-    });
-  }
+        const prefix = sessionCount === this.selectedSessionIdx ? '▶ ' : '  ';
+        const mode = s.headless ? '(H)' : '(G)';
+        const verifyTag = s.isVerifying ? ' {red-bg}{white-fg}[VERIFY]{/}' : '';
+        sidebarItems.push(`${prefix}${s.name.padEnd(25).substring(0, 25)} ${mode}${verifyTag}`);
+        sessionCount++;
+      });
+    }
 
-  if (olderSessions.length > 0) {
-    sidebarItems.push('{center}{grey-fg}--- OLDER ---{/}{/}');
-    olderSessions.forEach(s => {
-      const prefix = sessionCount === this.selectedSessionIdx ? '▶ ' : '  ';
-      const mode = s.headless ? '(H)' : '(G)';
-      const verifyTag = s.isVerifying ? ' {red-bg}{white-fg}[VERIFY]{/}' : '';
-      sidebarItems.push(`${prefix}${s.name.padEnd(25).substring(0, 25)} ${mode}${verifyTag}`);
-      sessionCount++;
-    });
-  }
+    if (olderSessions.length > 0) {
+      sidebarItems.push('{center}{grey-fg}--- OLDER ---{/}{/}');
+      olderSessions.forEach(s => {
+        const prefix = sessionCount === this.selectedSessionIdx ? '▶ ' : '  ';
+        const mode = s.headless ? '(H)' : '(G)';
+        const verifyTag = s.isVerifying ? ' {red-bg}{white-fg}[VERIFY]{/}' : '';
+        sidebarItems.push(`${prefix}${s.name.padEnd(25).substring(0, 25)} ${mode}${verifyTag}`);
+        sessionCount++;
+      });
+    }
 
     this.sidebar.setItems(sidebarItems);
     
@@ -498,11 +546,23 @@ export class BlessedUI {
     }
 
     this.sidebar.style.border.fg = this.focusPane === 'sidebar' ? 'cyan' : 'gray';
-    this.taskArea.style.border.fg = this.focusPane === 'tasks' ? 'cyan' : 'white';
+    this.taskArea.style.border.fg = this.focusPane === 'tasks' ? 'cyan' : 'gray';
 
-    // Update Tasks
+    // Update Tasks & Session Info
     const currentSession = this.sessions[this.selectedSessionIdx] as PersistedSession | undefined;
     if (currentSession) {
+      // Session Info Area
+      const id = currentSession.id;
+      const created = new Date(currentSession.createdAt || Date.now()).toLocaleString();
+      const updated = new Date(currentSession.updatedAt).toLocaleString();
+      const stats = currentSession.stats || { tokens: 0, cost: 0, contextSize: 0 };
+      
+      const infoText = [
+        `{cyan-fg}ID:{/} ${id.padEnd(15)} {cyan-fg}Created:{/} ${created} {cyan-fg}Updated:{/} ${updated}`,
+        `{yellow-fg}Tokens:{/} ${stats.tokens.toLocaleString()} (Limit: 1M) | {yellow-fg}Cost:{/} $${stats.cost.toFixed(4)} | {yellow-fg}Context:{/} ${stats.contextSize} msgs`
+      ].join('\n');
+      this.taskInfoArea.setContent(infoText);
+
       const tasks = this.queueEngine.getTasks().filter((t: AgentTask) => t.sessionId === currentSession.id);
       
       const taskItems: string[] = [];
@@ -512,7 +572,8 @@ export class BlessedUI {
         tasks.forEach((t: AgentTask, i: number) => {
           const color = t.status === 'running' ? 'yellow' : t.status === 'completed' ? 'green' : 'white';
           const prefix = (this.focusPane === 'tasks' && i === this.selectedTaskIdx) ? '▶ ' : '  ';
-          taskItems.push(`${prefix}{${color}-fg}[${t.status.toUpperCase()}] ${t.goal}{/}`);
+          const timeInfo = t.completedAt ? ` {grey-fg}(Done: ${new Date(t.completedAt).toLocaleTimeString()}){/}` : '';
+          taskItems.push(`${prefix}{${color}-fg}[${t.status.toUpperCase()}] ${t.goal}{/}${timeInfo}`);
           if (t.result) {
             taskItems.push(`    {white-fg}└─ Ans: ${t.result}{/}`);
           }
