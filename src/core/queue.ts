@@ -2,7 +2,7 @@ import PQueue from 'p-queue';
 import fs from 'fs';
 import path from 'path';
 import { log } from '../utils/logger';
-import { BrowserAgent } from './agent';
+import { BrowserAgent } from '../agents/browser';
 
 export interface AgentTask {
   id: string;
@@ -100,9 +100,12 @@ export class QueueEngine {
             agent = new BrowserAgent(sessionId, config?.headless);
             this.agents.set(sessionId, agent);
           }
-          const res = await agent.executeTask(goal);
-          task.result = res.answer;
-          task.url = res.url;
+          const res = await agent.execute(taskId, goal);
+          task.result = res.data.answer;
+          task.url = res.data.url;
+          if (res.status === 'failed') {
+            throw new Error(res.message || 'Agent 執行失敗');
+          }
         }
         task.status = 'completed';
         log(`[Queue] 任務 ${taskId} 完成`);

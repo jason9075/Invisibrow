@@ -10,6 +10,36 @@ export interface A2AMessage {
   timestamp?: string;
 }
 
+export type TaskState = 'submitted' | 'working' | 'completed' | 'failed' | 'canceled' | 'intervention';
+
+export interface TaskStatus {
+  state: TaskState;
+  message?: A2AMessage;
+  timestamp: string;
+}
+
+export interface Task {
+  id: string;
+  contextId: string;
+  status: TaskStatus;
+  history: A2AMessage[];
+  artifacts?: any[];
+}
+
+export interface AgentSkill {
+  id: string;
+  name: string;
+  description: string;
+  examples?: string[];
+}
+
+export interface AgentCard {
+  name: string;
+  description: string;
+  version: string;
+  skills: AgentSkill[];
+}
+
 export interface AgentResponse<T = any> {
   status: 'success' | 'failed' | 'intervention';
   data: T;
@@ -17,6 +47,6 @@ export interface AgentResponse<T = any> {
 }
 
 export interface IAgent<TInput = any, TOutput = any> {
-  name: string;
-  execute(input: TInput): Promise<AgentResponse<TOutput>>;
+  card: AgentCard;
+  execute(taskId: string, input: TInput): Promise<AgentResponse<TOutput>>;
 }

@@ -1,12 +1,9 @@
-import 'dotenv/config';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import OpenAI from 'openai';
 import { z } from 'zod';
-import path from 'path';
-import { log, eventBus } from '../utils/logger';
-
-puppeteer.use(StealthPlugin());
+import { log, eventBus } from '../../utils/logger';
+import { BrowserManager } from '../../core/browser';
+import type { IAgent, AgentResponse } from '../../core/types';
+import { AuditorAgent } from '../auditor';
 
 const ActionSchema = z.object({
   thought: z.string(),
@@ -15,75 +12,70 @@ const ActionSchema = z.object({
   answer: z.string().optional(),
 });
 
-export class BrowserAgent {
-  private browser: any;
-  private page: any;
+export type BrowserAction = z.infer<typeof ActionSchema>;
+
+export class BrowserAgent implements IAgent<string, { answer: string; url: string }> {
+  readonly card = {
+    name: 'BrowserAgent',
+    description: '負責自主瀏覽網頁、搜尋資訊並執行互動操作',
+    version: '1.0.0',
+    skills: [
+      {
+        id: 'web_navigation',
+        name: '網頁導航',
+        description: '前往指定 URL 並獲取頁面內容'
+      },
+      {
+        id: 'web_interaction',
+        name: '網頁互動',
+        description: '點擊、輸入文字、搜尋等操作'
+      }
+    ]
+  };
+
   private openai: OpenAI;
+  private browserMgr: BrowserManager;
+  private auditor: AuditorAgent;
   public sessionId: string;
-  private headless: boolean;
 
   constructor(sessionId: string, headless: boolean = true) {
     this.sessionId = sessionId;
-    this.headless = headless;
+    this.browserMgr = new BrowserManager(sessionId, headless);
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
+    this.auditor = new AuditorAgent();
   }
 
-  async init() {
-    if (this.browser && this.browser.isConnected()) return;
-
-    // 如果瀏覽器存在但連線中斷，先清理
-    if (this.browser) {
-      await this.close();
-    }
-
-    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
-    const userDataDir = path.join(homeDir, '.local', 'share', 'invisibrow', 'storage', 'session', this.sessionId);
-    log(`[${this.sessionId}] 啟動瀏覽器 (Headless: ${this.headless}, userDataDir: ${userDataDir})`);
-
-    this.browser = await puppeteer.launch({
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-      headless: this.headless as any,
-      userDataDir,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800',
-        '--lang=zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
-      ],
-      defaultViewport: { width: 1280, height: 800 }
-    });
-
-    this.browser.on('disconnected', () => {
-      log(`[${this.sessionId}] 瀏覽器連線中斷 (可能是手動關閉或崩潰)`, 'warn');
-      this.browser = null;
-      this.page = null;
-    });
-
-    const pages = await this.browser.pages();
-    this.page = pages.length > 0 ? pages[0] : await this.browser.newPage();
-
-    // 額外的 Stealth 設定
-    await this.page.setExtraHTTPHeaders({
-      'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
-    });
-  }
-
-  async executeTask(goal: string) {
-    await this.init();
-
-    if (goal === 'MANUAL_LOGIN') {
-      log(`[${this.sessionId}] 進入手動操作模式 (300 秒)`);
-      // 確保至少有一個空白頁或當前頁
-      if (this.page.url() === 'about:blank') {
-        await this.page.goto('https://www.google.com');
+  async execute(taskId: string, goal: string): Promise<AgentResponse<{ answer: string; url: string }>> {
+    try {
+      if (goal === 'MANUAL_LOGIN') {
+        await this.browserMgr.init();
+        const page = this.browserMgr.getPage();
+        log(`[${this.sessionId}] [${taskId}] 進入手動操作模式 (300 秒)`);
+        if (page.url() === 'about:blank') {
+          await page.goto('https://www.google.com');
+        }
+        await new Promise(r => setTimeout(r, 300000));
+        return { 
+          status: 'success', 
+          data: { answer: '手動操作結束', url: page.url() } 
+        };
       }
-      await new Promise(r => setTimeout(r, 300000));
-      return { answer: '手動操作結束', url: this.page.url() };
-    }
 
+      const result = await this.runAutomation(taskId, goal);
+      return { status: 'success', data: result };
+    } catch (error: any) {
+      return { 
+        status: 'failed', 
+        data: { answer: '', url: '' }, 
+        message: error.message 
+      };
+    }
+  }
+
+  private async runAutomation(taskId: string, goal: string) {
+    await this.browserMgr.init();
     let currentStep = 0;
     const history: string[] = [];
 
@@ -91,12 +83,24 @@ export class BrowserAgent {
       currentStep++;
       const state = await this.getPageState();
 
-      // 新增機器人偵測檢查
+      // 每 3 步進行一次審計，或者在檢測到機器人時
+      if (currentStep % 3 === 0) {
+        log(`[${this.sessionId}] [${taskId}] 執行流程審計...`);
+        const auditRes = await this.auditor.execute(taskId, {
+          goal,
+          state,
+          history
+        });
+
+        if (auditRes.status === 'intervention') {
+          log(`[${this.sessionId}] [${taskId}] 審計建議介入: ${auditRes.data.reason}`, 'warn');
+          // 如果審計發現卡住或需要介入，可以在這裡處理，目前先記錄
+        }
+      }
+
       const isBotDetected = await this.checkBotDetection(state);
       if (isBotDetected) {
-        log(`[${this.sessionId}] 偵測到機器人攔截，詢問使用者是否手動排除...`, 'warn');
-        
-        // 1. 通知 TUI 並等待使用者決定 (Yes/No)
+        log(`[${this.sessionId}] [${taskId}] 偵測到機器人攔截，詢問使用者是否手動排除...`, 'warn');
         eventBus.emit('verification_needed', { sessionId: this.sessionId, url: state.url });
         
         const decision = await new Promise<'accept' | 'deny'>((resolve) => {
@@ -119,23 +123,14 @@ export class BrowserAgent {
         });
 
         if (decision === 'deny') {
-          log(`[${this.sessionId}] 使用者取消手動排除，終止任務。`, 'error');
-          return { answer: '使用者取消驗證排除，任務終止。', url: state.url };
+          throw new Error('使用者取消驗證排除');
         }
 
-        log(`[${this.sessionId}] 使用者同意排除，切換至 GUI 模式...`);
-        
-        // 2. 切換至 GUI 模式
-        const wasHeadless = this.headless;
-        if (wasHeadless) {
-          await this.close();
-          this.headless = false;
-          await this.init();
-          // 重啟後可能需要重新進入該頁面
-          await this.page.goto(state.url, { waitUntil: 'networkidle2' });
-        }
+        this.browserMgr.setHeadless(false);
+        await this.browserMgr.init();
+        const page = this.browserMgr.getPage();
+        await page.goto(state.url, { waitUntil: 'networkidle2' });
 
-        // 3. 阻塞直到使用者按下 C
         await new Promise<void>((resolve) => {
           const handler = (data: any) => {
             if (data.sessionId === this.sessionId) {
@@ -145,14 +140,11 @@ export class BrowserAgent {
           };
           eventBus.on('verification_resolved', handler);
         });
-
-        log(`[${this.sessionId}] 驗證完成，繼續任務...`);
         continue;
       }
 
       const decision = await this.getDecision(goal, state, history);
-      
-      log(`[${this.sessionId}] Step ${currentStep}: ${decision.thought}`);
+      log(`[${this.sessionId}] [${taskId}] Step ${currentStep}: ${decision.thought}`);
       history.push(`${currentStep}: ${decision.thought}`);
 
       if (decision.action === 'answer' || decision.action === 'finish') {
@@ -163,72 +155,47 @@ export class BrowserAgent {
       }
 
       await this.performAction(decision);
-      // 隨機等待 2-4 秒，模擬人類觀察頁面
       await new Promise(r => setTimeout(r, 2000 + Math.random() * 2000));
     }
     throw new Error('達到最大步數限制');
   }
 
   private async checkBotDetection(state: any): Promise<boolean> {
-    const botKeywords = [
-      'CAPTCHA',
-      'Verify you are human',
-      'Are you a robot',
-      '偵測到異常流量',
-      '請證明你不是機器人',
-      'Google 驗證頁面'
-    ];
-    
-    // 檢查內容片段和標題
+    const botKeywords = ['CAPTCHA', 'Verify you are human', 'Are you a robot', '偵測到異常流量', '請證明你不是機器人', 'Google 驗證頁面'];
     const hasKeyword = botKeywords.some(keyword => 
       state.contentSnippet.toLowerCase().includes(keyword.toLowerCase()) || 
       state.title.toLowerCase().includes(keyword.toLowerCase())
     );
-
-    // Google 驗證頁面常見 URL 特徵
-    const isGoogleCaptcha = state.url.includes('google.com/sorry/index');
-
-    return hasKeyword || isGoogleCaptcha;
+    return hasKeyword || state.url.includes('google.com/sorry/index');
   }
 
   private async getPageState() {
+    await this.browserMgr.init();
+    const page = this.browserMgr.getPage();
     try {
-      // 確保瀏覽器和頁面仍然有效
-      await this.init();
-
-      if (!this.page || this.page.isClosed()) {
-        const pages = await this.browser.pages();
-        this.page = pages[0] || await this.browser.newPage();
-      }
-
-      return await this.page.evaluate(() => {
-        // 增加選擇器範圍，並過濾掉隱藏元素
+      return await page.evaluate(() => {
         const selectors = 'a, button, input, [role="button"], [role="link"], [role="tab"], [contenteditable="true"], [role="textbox"], textarea';
         const elements = Array.from(document.querySelectorAll(selectors))
           .filter(el => {
             const rect = el.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0; // 只要看得到的
+            return rect.width > 0 && rect.height > 0;
           });
 
         return {
           url: window.location.href,
           title: document.title,
           interactiveElements: elements
-            .slice(0, 100) // 增加到 100 個
+            .slice(0, 100)
             .map((el, i) => ({ 
               id: i, 
               tag: el.tagName,
               text: (el as any).innerText?.trim().substring(0, 50) || (el as any).placeholder || (el as any).getAttribute('aria-label') || '' 
             })),
-          contentSnippet: document.body.innerText.substring(0, 1500) // 增加長度
+          contentSnippet: (document.body as HTMLElement).innerText.substring(0, 1500)
         };
       });
     } catch (e: any) {
-      if (e.message.includes('detached') || e.message.includes('protocol error')) {
-        log(`[${this.sessionId}] 偵測到 Frame 異常，嘗試重新等待頁面穩定...`, 'warn');
-        await new Promise(r => setTimeout(r, 2000));
-        return this.getPageState(); // 重試
-      }
+      log(`[${this.sessionId}] 獲取頁面狀態失敗: ${e.message}`, 'error');
       throw e;
     }
   }
@@ -251,7 +218,7 @@ ${history.join('\n')}
 
 請決定下一步動作。回傳格式必須是 JSON 物件：
 {
-  "thought": "你的思考過程 (請確認目前的頁面是否符合預期)",
+  "thought": "你的思考過程",
   "action": "goto" | "click" | "type" | "search" | "wait" | "finish" | "answer",
   "param": "動作參數 (ID:文字 或 URL)",
   "answer": "最終答案"
@@ -261,47 +228,37 @@ ${history.join('\n')}
       ],
       response_format: { type: 'json_object' }
     });
-    return JSON.parse(response.choices[0].message.content!) as z.infer<typeof ActionSchema>;
+    return JSON.parse(response.choices[0].message.content!) as BrowserAction;
   }
 
-  private async performAction(decision: any) {
+  private async performAction(decision: BrowserAction) {
+    const page = this.browserMgr.getPage();
     try {
       switch (decision.action) {
         case 'goto':
-          if (decision.param) await this.page.goto(decision.param, { waitUntil: 'networkidle2', timeout: 30000 });
+          if (decision.param) await page.goto(decision.param, { waitUntil: 'networkidle2', timeout: 30000 });
           break;
         case 'search':
           if (decision.param) {
-            log(`[${this.sessionId}] 模擬真人搜尋流程: ${decision.param}`);
-            // 1. 先去 Google 首頁
-            await this.page.goto('https://www.google.com', { waitUntil: 'networkidle2' });
-            
-            // 2. 隨機等待 1-2 秒，模擬思考
+            await page.goto('https://www.google.com', { waitUntil: 'networkidle2' });
             await new Promise(r => setTimeout(r, 1000 + Math.random() * 1000));
-
-            // 3. 尋找輸入框 (Google 的輸入框通常是 textarea[name="q"] 或 input[name="q"])
-            const searchInput = await this.page.$('textarea[name="q"], input[name="q"]');
+            const searchInput = await page.$('textarea[name="q"], input[name="q"]');
             if (searchInput) {
               await searchInput.focus();
               await searchInput.click();
-              // 4. 模擬人類打字速度
-              await this.page.keyboard.type(decision.param, { delay: 150 + Math.random() * 200 });
-              // 5. 隨機等待一下再按 Enter
+              await page.keyboard.type(decision.param, { delay: 150 + Math.random() * 200 });
               await new Promise(r => setTimeout(r, 500 + Math.random() * 500));
-              await this.page.keyboard.press('Enter');
-              // 6. 等待搜尋結果加載，增加 timeout 並檢查可能的 bot 偵測
-              await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
+              await page.keyboard.press('Enter');
+              await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
             } else {
-              // 退而求其次使用直接跳轉 (作為備案)
-              log(`[${this.sessionId}] 找不到搜尋框，改用直接跳轉`, 'warn');
-              await this.page.goto(`https://www.google.com/search?q=${encodeURIComponent(decision.param)}`, { waitUntil: 'networkidle2' });
+              await page.goto(`https://www.google.com/search?q=${encodeURIComponent(decision.param)}`, { waitUntil: 'networkidle2' });
             }
           }
           break;
         case 'click':
           if (decision.param) {
             const id = parseInt(decision.param);
-            await this.page.evaluate((targetId: number) => {
+            await page.evaluate((targetId: number) => {
               const selectors = 'a, button, input, [role="button"], [role="link"], [role="tab"], [contenteditable="true"], [role="textbox"], textarea';
               const elements = Array.from(document.querySelectorAll(selectors)).filter(el => {
                 const rect = el.getBoundingClientRect();
@@ -313,7 +270,6 @@ ${history.join('\n')}
                 el.click();
               }
             }, id);
-            // 點擊後多等一下，讓 X.com 這種 SPA 有時間渲染
             await new Promise(r => setTimeout(r, 2500));
           }
           break;
@@ -322,20 +278,17 @@ ${history.join('\n')}
             const [targetId, ...textParts] = decision.param.split(':');
             const text = textParts.join(':');
             const id = parseInt(targetId);
-            
-            await this.page.evaluate((tid: number, txt: string) => {
+            await page.evaluate((tid: number, txt: string) => {
               const selectors = 'a, button, input, [role="button"], [role="link"], [role="tab"], [contenteditable="true"], [role="textbox"], textarea';
               const el = Array.from(document.querySelectorAll(selectors))[tid] as HTMLElement;
               if (el) {
                 el.scrollIntoView({ behavior: 'smooth', block: 'center' });
                 el.focus();
                 el.click();
-                // 學習 project-golem 的方式，模擬真實輸入
                 document.execCommand('insertText', false, txt);
               }
             }, id, text);
-
-            await this.page.keyboard.press('Enter');
+            await page.keyboard.press('Enter');
           }
           break;
         case 'wait':
@@ -349,9 +302,6 @@ ${history.join('\n')}
   }
 
   async close() {
-    if (this.browser) {
-      await this.browser.close();
-      this.browser = null;
-    }
+    await this.browserMgr.close();
   }
 }

@@ -1,6 +1,6 @@
 import OpenAI from 'openai';
 import { getConfig } from '../../utils/config';
-import type { IAgent, AgentResponse } from '../../core/types';
+import type { IAgent, AgentResponse, AgentCard } from '../../core/types';
 
 export interface AuditInput {
   goal: string;
@@ -19,7 +19,19 @@ export interface AuditOutput {
 }
 
 export class AuditorAgent implements IAgent<AuditInput, AuditOutput> {
-  readonly name = 'AuditorAgent';
+  readonly card: AgentCard = {
+    name: 'Auditor Agent',
+    description: '審計瀏覽器 Agent 的流程是否卡住或需要介入',
+    version: '1.0.0',
+    skills: [
+      {
+        id: 'process_audit',
+        name: 'Process Audit',
+        description: '分析瀏覽器狀態與歷史紀錄以判斷任務進度'
+      }
+    ]
+  };
+  
   private openai: OpenAI;
   private model: string;
 
@@ -31,7 +43,7 @@ export class AuditorAgent implements IAgent<AuditInput, AuditOutput> {
     });
   }
 
-  async execute(input: AuditInput): Promise<AgentResponse<AuditOutput>> {
+  async execute(taskId: string, input: AuditInput): Promise<AgentResponse<AuditOutput>> {
     const { goal, state, history } = input;
 
     try {
@@ -57,6 +69,7 @@ export class AuditorAgent implements IAgent<AuditInput, AuditOutput> {
           {
             role: 'user',
             content: JSON.stringify({
+              taskId,
               currentUrl: state.url,
               pageTitle: state.title,
               content: state.contentSnippet,
