@@ -74,7 +74,7 @@ export class BrowserAgent implements IAgent<string, { answer: string; url: strin
     }
   }
 
-  private async runAutomation(taskId: string, goal: string) {
+  public async runAutomation(taskId: string, goal: string) {
     await this.browserMgr.init();
     let currentStep = 0;
     const history: string[] = [];
@@ -82,21 +82,6 @@ export class BrowserAgent implements IAgent<string, { answer: string; url: strin
     while (currentStep < 15) {
       currentStep++;
       const state = await this.getPageState();
-
-      // 每 3 步進行一次監控，或者在檢測到機器人時
-      if (currentStep % 3 === 0) {
-        log(`[${this.sessionId}] [${taskId}] 執行 Watchdog 監控...`);
-        const watchdogRes = await this.watchdog.execute(taskId, {
-          goal,
-          state,
-          history
-        });
-
-        if (watchdogRes.status === 'intervention') {
-          log(`[${this.sessionId}] [${taskId}] Watchdog 建議介入: ${watchdogRes.data.reason}`, 'warn');
-          // 如果監控發現卡住或需要介入，目前先記錄
-        }
-      }
 
       const isBotDetected = await this.checkBotDetection(state);
       if (isBotDetected) {
@@ -169,7 +154,7 @@ export class BrowserAgent implements IAgent<string, { answer: string; url: strin
     return hasKeyword || state.url.includes('google.com/sorry/index');
   }
 
-  private async getPageState() {
+  public async getPageState() {
     await this.browserMgr.init();
     const page = this.browserMgr.getPage();
     try {

@@ -4,6 +4,7 @@ import os from 'os';
 
 export interface InvisibrowConfig {
   models: {
+    planerAgent: string;
     browserAgent: string;
     watchdogAgent: string;
   };
@@ -11,8 +12,9 @@ export interface InvisibrowConfig {
 
 const DEFAULT_CONFIG: InvisibrowConfig = {
   models: {
-    browserAgent: 'gpt-4o',
-    watchdogAgent: 'gpt-4o-mini', // "nano" equivalent in OpenAI
+    planerAgent: 'gpt-4o',
+    browserAgent: 'gpt-4o-mini',
+    watchdogAgent: 'gpt-4o-mini',
   }
 };
 

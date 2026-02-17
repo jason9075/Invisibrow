@@ -2,7 +2,7 @@ import PQueue from 'p-queue';
 import fs from 'fs';
 import path from 'path';
 import { log } from '../utils/logger';
-import { BrowserAgent } from '../agents/browser';
+import { PlanerAgent } from '../agents/planer';
 
 export interface AgentTask {
   id: string;
@@ -25,13 +25,14 @@ export interface SessionConfig {
 export class QueueEngine {
   private queue: PQueue;
   private tasks: Map<string, AgentTask> = new Map();
-  private agents: Map<string, BrowserAgent> = new Map();
+  private planer: PlanerAgent;
   private sessionConfigs: Map<string, SessionConfig> = new Map();
   private storagePath: string;
   private tasksFilePath: string;
 
   constructor(concurrency: number = 2) {
     this.queue = new PQueue({ concurrency });
+    this.planer = new PlanerAgent();
     
     const homeDir = process.env.HOME || process.env.USERPROFILE || '';
     this.storagePath = path.join(homeDir, '.local', 'share', 'invisibrow', 'storage');
@@ -96,12 +97,7 @@ export class QueueEngine {
           task.result = "這是一個 Mock 的任務結果，用來測試 TUI 的顯示效果。";
           task.url = "https://www.google.com/search?q=this+is+a+very+long+url+to+test+truncation+logic+in+the+tui&sca_esv=123456&source=hp&ei=abcdef";
         } else {
-          let agent = this.agents.get(sessionId);
-          if (!agent) {
-            agent = new BrowserAgent(sessionId, config?.headless);
-            this.agents.set(sessionId, agent);
-          }
-          const res = await agent.execute(taskId, goal);
+          const res = await this.planer.execute(taskId, { goal, sessionId });
           task.result = res.data.answer;
           task.url = res.data.url;
           if (res.status === 'failed') {

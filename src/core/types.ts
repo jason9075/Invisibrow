@@ -46,6 +46,12 @@ export interface AgentResponse<T = any> {
   message?: string;
 }
 
+export interface PlanerStep {
+  thought: string;
+  command: 'browser' | 'finish' | 'wait';
+  input: any;
+}
+
 export interface IAgent<TInput = any, TOutput = any> {
   card: AgentCard;
   execute(taskId: string, input: TInput): Promise<AgentResponse<TOutput>>;

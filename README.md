@@ -35,6 +35,24 @@ just init
 just run https://news.ycombinator.com "有哪些關於 AI 的新聞？"
 ```
 
+## ⚙️ 進階配置 (Model Adjustment)
+
+本專案採用多 Agent 協同架構，您可以在 `~/.config/invisibrow.json` 中自定義各個 Agent 使用的模型：
+
+```json
+{
+  "models": {
+    "planerAgent": "gpt-4o",
+    "browserAgent": "gpt-4o-mini",
+    "watchdogAgent": "gpt-4o-mini"
+  }
+}
+```
+
+- **PlanerAgent**: 負責任務拆解與邏輯規劃，建議使用 `gpt-4o`。
+- **BrowserAgent**: 負責網頁互動與資料提取，若發現執行動作不準確，可升級至 `gpt-4o`。
+- **WatchdogAgent**: 負責異常監控，建議維持 `gpt-4o-mini` 以節省成本。
+
 ## 📜 常用指令 (Justfile)
 
 | 指令 | 說明 |
