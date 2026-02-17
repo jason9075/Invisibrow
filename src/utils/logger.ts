@@ -2,7 +2,12 @@ import winston from 'winston';
 import { EventEmitter } from 'events';
 
 /**
- * 全域事件匯流排，用於 TUI 訂閱日誌
+ * 全域事件匯流排
+ * log: 日誌更新
+ * verification_needed: 偵測到驗證碼，詢問是否排除
+ * verification_accepted: 使用者同意排除
+ * verification_denied: 使用者拒絕排除
+ * verification_resolved: 驗證完成（按下 c）
  */
 export const eventBus = new EventEmitter();
 

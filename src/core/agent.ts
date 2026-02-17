@@ -4,7 +4,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 import OpenAI from 'openai';
 import { z } from 'zod';
 import path from 'path';
-import { log } from '../utils/logger';
+import { log, eventBus } from '../utils/logger';
 
 puppeteer.use(StealthPlugin());
 
@@ -20,39 +20,70 @@ export class BrowserAgent {
   private page: any;
   private openai: OpenAI;
   public sessionId: string;
+  private headless: boolean;
 
-  constructor(sessionId: string) {
+  constructor(sessionId: string, headless: boolean = true) {
     this.sessionId = sessionId;
+    this.headless = headless;
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
     });
   }
 
   async init() {
-    if (this.browser) return;
+    if (this.browser && this.browser.isConnected()) return;
 
-    const userDataDir = path.join(process.cwd(), 'user_data', `session_${this.sessionId}`);
-    log(`[${this.sessionId}] 啟動瀏覽器 (userDataDir: ${userDataDir})`);
+    // 如果瀏覽器存在但連線中斷，先清理
+    if (this.browser) {
+      await this.close();
+    }
+
+    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+    const userDataDir = path.join(homeDir, '.local', 'share', 'invisibrow', 'storage', 'session', this.sessionId);
+    log(`[${this.sessionId}] 啟動瀏覽器 (Headless: ${this.headless}, userDataDir: ${userDataDir})`);
 
     this.browser = await puppeteer.launch({
       executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-      headless: process.env.HEADLESS === 'true' ? 'new' : false,
+      headless: this.headless as any,
       userDataDir,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800'
+        '--window-size=1280,800',
+        '--lang=zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
       ],
       defaultViewport: { width: 1280, height: 800 }
     });
 
+    this.browser.on('disconnected', () => {
+      log(`[${this.sessionId}] 瀏覽器連線中斷 (可能是手動關閉或崩潰)`, 'warn');
+      this.browser = null;
+      this.page = null;
+    });
+
     const pages = await this.browser.pages();
     this.page = pages.length > 0 ? pages[0] : await this.browser.newPage();
+
+    // 額外的 Stealth 設定
+    await this.page.setExtraHTTPHeaders({
+      'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
+    });
   }
 
   async executeTask(goal: string) {
     await this.init();
+
+    if (goal === 'MANUAL_LOGIN') {
+      log(`[${this.sessionId}] 進入手動操作模式 (300 秒)`);
+      // 確保至少有一個空白頁或當前頁
+      if (this.page.url() === 'about:blank') {
+        await this.page.goto('https://www.google.com');
+      }
+      await new Promise(r => setTimeout(r, 300000));
+      return { answer: '手動操作結束', url: this.page.url() };
+    }
+
     let currentStep = 0;
     const history: string[] = [];
 
@@ -63,11 +94,60 @@ export class BrowserAgent {
       // 新增機器人偵測檢查
       const isBotDetected = await this.checkBotDetection(state);
       if (isBotDetected) {
-        log(`[${this.sessionId}] 偵測到機器人攔截 (CAPTCHA/Challenge)，停止搜尋。`, 'error');
-        return { 
-          answer: '偵測到機器人攔截，任務終止。', 
-          url: state.url 
-        };
+        log(`[${this.sessionId}] 偵測到機器人攔截，詢問使用者是否手動排除...`, 'warn');
+        
+        // 1. 通知 TUI 並等待使用者決定 (Yes/No)
+        eventBus.emit('verification_needed', { sessionId: this.sessionId, url: state.url });
+        
+        const decision = await new Promise<'accept' | 'deny'>((resolve) => {
+          const onAccept = (data: any) => {
+            if (data.sessionId === this.sessionId) {
+              eventBus.off('verification_accepted', onAccept);
+              eventBus.off('verification_denied', onDeny);
+              resolve('accept');
+            }
+          };
+          const onDeny = (data: any) => {
+            if (data.sessionId === this.sessionId) {
+              eventBus.off('verification_accepted', onAccept);
+              eventBus.off('verification_denied', onDeny);
+              resolve('deny');
+            }
+          };
+          eventBus.on('verification_accepted', onAccept);
+          eventBus.on('verification_denied', onDeny);
+        });
+
+        if (decision === 'deny') {
+          log(`[${this.sessionId}] 使用者取消手動排除，終止任務。`, 'error');
+          return { answer: '使用者取消驗證排除，任務終止。', url: state.url };
+        }
+
+        log(`[${this.sessionId}] 使用者同意排除，切換至 GUI 模式...`);
+        
+        // 2. 切換至 GUI 模式
+        const wasHeadless = this.headless;
+        if (wasHeadless) {
+          await this.close();
+          this.headless = false;
+          await this.init();
+          // 重啟後可能需要重新進入該頁面
+          await this.page.goto(state.url, { waitUntil: 'networkidle2' });
+        }
+
+        // 3. 阻塞直到使用者按下 C
+        await new Promise<void>((resolve) => {
+          const handler = (data: any) => {
+            if (data.sessionId === this.sessionId) {
+              eventBus.off('verification_resolved', handler);
+              resolve();
+            }
+          };
+          eventBus.on('verification_resolved', handler);
+        });
+
+        log(`[${this.sessionId}] 驗證完成，繼續任務...`);
+        continue;
       }
 
       const decision = await this.getDecision(goal, state, history);
@@ -83,7 +163,8 @@ export class BrowserAgent {
       }
 
       await this.performAction(decision);
-      await new Promise(r => setTimeout(r, 2000));
+      // 隨機等待 2-4 秒，模擬人類觀察頁面
+      await new Promise(r => setTimeout(r, 2000 + Math.random() * 2000));
     }
     throw new Error('達到最大步數限制');
   }
@@ -112,8 +193,10 @@ export class BrowserAgent {
 
   private async getPageState() {
     try {
-      // 確保頁面還活著
-      if (this.page.isClosed()) {
+      // 確保瀏覽器和頁面仍然有效
+      await this.init();
+
+      if (!this.page || this.page.isClosed()) {
         const pages = await this.browser.pages();
         this.page = pages[0] || await this.browser.newPage();
       }
@@ -188,7 +271,32 @@ ${history.join('\n')}
           if (decision.param) await this.page.goto(decision.param, { waitUntil: 'networkidle2', timeout: 30000 });
           break;
         case 'search':
-          if (decision.param) await this.page.goto(`https://www.google.com/search?q=${encodeURIComponent(decision.param)}`, { waitUntil: 'networkidle2' });
+          if (decision.param) {
+            log(`[${this.sessionId}] 模擬真人搜尋流程: ${decision.param}`);
+            // 1. 先去 Google 首頁
+            await this.page.goto('https://www.google.com', { waitUntil: 'networkidle2' });
+            
+            // 2. 隨機等待 1-2 秒，模擬思考
+            await new Promise(r => setTimeout(r, 1000 + Math.random() * 1000));
+
+            // 3. 尋找輸入框 (Google 的輸入框通常是 textarea[name="q"] 或 input[name="q"])
+            const searchInput = await this.page.$('textarea[name="q"], input[name="q"]');
+            if (searchInput) {
+              await searchInput.focus();
+              await searchInput.click();
+              // 4. 模擬人類打字速度
+              await this.page.keyboard.type(decision.param, { delay: 150 + Math.random() * 200 });
+              // 5. 隨機等待一下再按 Enter
+              await new Promise(r => setTimeout(r, 500 + Math.random() * 500));
+              await this.page.keyboard.press('Enter');
+              // 6. 等待搜尋結果加載，增加 timeout 並檢查可能的 bot 偵測
+              await this.page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 45000 });
+            } else {
+              // 退而求其次使用直接跳轉 (作為備案)
+              log(`[${this.sessionId}] 找不到搜尋框，改用直接跳轉`, 'warn');
+              await this.page.goto(`https://www.google.com/search?q=${encodeURIComponent(decision.param)}`, { waitUntil: 'networkidle2' });
+            }
+          }
           break;
         case 'click':
           if (decision.param) {

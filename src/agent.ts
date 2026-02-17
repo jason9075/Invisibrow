@@ -54,7 +54,8 @@ export class BrowserAgent {
     if (this.browser) return;
 
     const useSession = process.env.USE_SESSION === 'true';
-    const userDataDir = useSession ? path.join(process.cwd(), 'user_data') : undefined;
+    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+    const userDataDir = useSession ? path.join(homeDir, '.local', 'share', 'invisibrow', 'storage', 'session', 'default') : undefined;
 
     console.log(`🚀 Starting browser (Session: ${useSession ? 'Persistent' : 'Ephemeral'})...`);
     

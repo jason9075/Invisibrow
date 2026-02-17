@@ -1,31 +1,52 @@
+import fs from 'fs';
+import path from 'path';
 import blessed from 'blessed';
 import type { QueueEngine, SessionConfig, AgentTask } from '../core/queue';
 import { eventBus, log } from '../utils/logger';
+import { copyToClipboard, openUrl } from '../utils/clipboard';
 
-type UIMode = 'normal' | 'options' | 'execute' | 'rename';
+type UIMode = 'normal' | 'options' | 'execute' | 'rename' | 'verify';
+
+interface PersistedSession extends SessionConfig {
+  updatedAt: string;
+  isVerifying?: boolean;
+}
 
 export class BlessedUI {
   private screen: blessed.Widgets.Screen;
   private queueEngine: QueueEngine;
-  private sessions: SessionConfig[] = [{ id: 'default', name: 'Default Session', headless: true }];
+  private sessions: PersistedSession[] = [];
   private selectedSessionIdx = 0;
+  private selectedTaskIdx = 0;
+  private focusPane: 'sidebar' | 'tasks' = 'sidebar';
   private logs: string[] = [];
   private mode: UIMode = 'normal';
+  private storagePath: string;
+  private sessionsFilePath: string;
 
   // Layout Components
   private header: blessed.Widgets.BoxElement;
   private sidebar: blessed.Widgets.ListElement;
-  private taskArea: blessed.Widgets.BoxElement;
+  private taskArea: blessed.Widgets.ListElement;
   private logArea: blessed.Widgets.BoxElement;
   private commandBar: blessed.Widgets.BoxElement;
   private commandInput: blessed.Widgets.TextboxElement;
+  private questionBox: blessed.Widgets.QuestionElement;
 
   constructor(queueEngine: QueueEngine) {
     this.queueEngine = queueEngine;
+    
+    const homeDir = process.env.HOME || process.env.USERPROFILE || '';
+    this.storagePath = path.join(homeDir, '.local', 'share', 'invisibrow', 'storage');
+    this.sessionsFilePath = path.join(this.storagePath, 'sessions.json');
+    
+    this.loadSessions();
+
     this.screen = blessed.screen({
       smartCSR: true,
-      title: 'AI Browser Agent TUI',
+      title: 'Invisibrow TUI',
       fullUnicode: true,
+      mouse: true,
     });
 
     const headerHeight = 1;
@@ -56,12 +77,13 @@ export class BlessedUI {
         border: { fg: 'cyan' },
         selected: { bg: 'cyan', fg: 'black' }
       },
+      tags: true, // Enable tags for styling headers
       keys: false,
       vi: false
     });
 
     // 3. Task Area
-    this.taskArea = blessed.box({
+    this.taskArea = blessed.list({
       parent: this.screen,
       top: headerHeight,
       left: sidebarWidth,
@@ -69,9 +91,14 @@ export class BlessedUI {
       height: `100%-${headerHeight + logHeight + commandBarHeight}`,
       label: ' TASKS ',
       border: { type: 'line' },
-      style: { border: { fg: 'white' } },
+      style: {
+        border: { fg: 'white' },
+        selected: { bg: 'blue', fg: 'white' }
+      },
       tags: true,
-      scrollable: true
+      keys: false,
+      vi: false,
+      mouse: true
     });
 
     // 4. Log Area
@@ -112,6 +139,56 @@ export class BlessedUI {
       hidden: true
     });
 
+    this.questionBox = blessed.question({
+      parent: this.screen,
+      top: 'center',
+      left: 'center',
+      width: '50%',
+      height: 'shrink',
+      border: { type: 'line' },
+      style: {
+        border: { fg: 'red' },
+        bg: 'black',
+        fg: 'white'
+      },
+      hidden: true,
+      tags: true,
+      label: ' {red-fg}Bot Detection{/} '
+    });
+
+    this.sidebar.on('select', () => {
+      this.focusPane = 'sidebar';
+      this.updateUI();
+    });
+
+    this.taskArea.on('select', (item: any, index: number) => {
+      this.focusPane = 'tasks';
+      const currentSession = this.sessions[this.selectedSessionIdx];
+      if (!currentSession) return;
+      
+      const tasks = this.queueEngine.getTasks().filter(t => t.sessionId === currentSession.id);
+      
+      // Figure out which task was clicked based on line index
+      let count = 0;
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i] as AgentTask;
+        const taskStart = count;
+        count++; // Goal
+        if (t.result) count++; // Result line
+        const urlLine = t.url ? count : -1;
+        if (t.url) count++; // URL line
+        
+        if (index >= taskStart && index < count) {
+          this.selectedTaskIdx = i;
+          if (index === urlLine && t.url) {
+            copyToClipboard(t.url);
+          }
+          break;
+        }
+      }
+      this.updateUI();
+    });
+
     this.setupEvents();
     this.updateUI();
     this.sidebar.focus();
@@ -126,26 +203,76 @@ export class BlessedUI {
     this.screen.on('keypress', (_ch, key) => {
       if (this.mode === 'execute' || this.mode === 'rename') return; // Input handled by textbox
 
+      const s = this.sessions[this.selectedSessionIdx] as PersistedSession | undefined;
+
       // NORMAL MODE
       if (this.mode === 'normal') {
-        if (key.name === 'j' || key.name === 'down') {
-          if (this.selectedSessionIdx < this.sessions.length - 1) {
-            this.selectedSessionIdx++;
-            this.updateUI();
+        if (key.name === 'tab') {
+          this.focusPane = this.focusPane === 'sidebar' ? 'tasks' : 'sidebar';
+          this.updateUI();
+          return;
+        }
+
+        if (this.focusPane === 'sidebar') {
+          if (key.name === 'j' || key.name === 'down') {
+            if (this.selectedSessionIdx < this.sessions.length - 1) {
+              this.selectedSessionIdx++;
+              this.selectedTaskIdx = 0; // Reset task selection
+              this.updateUI();
+            }
+          }
+          if (key.name === 'k' || key.name === 'up') {
+            if (this.selectedSessionIdx > 0) {
+              this.selectedSessionIdx--;
+              this.selectedTaskIdx = 0; // Reset task selection
+              this.updateUI();
+            }
+          }
+        } else {
+          // Tasks Pane navigation
+          const currentSession = this.sessions[this.selectedSessionIdx];
+          const tasks = this.queueEngine.getTasks().filter(t => t.sessionId === currentSession?.id);
+          
+          if (key.name === 'j' || key.name === 'down') {
+            if (this.selectedTaskIdx < tasks.length - 1) {
+              this.selectedTaskIdx++;
+              this.updateUI();
+            }
+          }
+          if (key.name === 'k' || key.name === 'up') {
+            if (this.selectedTaskIdx > 0) {
+              this.selectedTaskIdx--;
+              this.updateUI();
+            }
+          }
+          if (key.name === 'y') {
+            const task = tasks[this.selectedTaskIdx];
+            if (task && task.url) {
+              copyToClipboard(task.url);
+            }
+          }
+          if (key.name === 'o') {
+            const task = tasks[this.selectedTaskIdx];
+            if (task && task.url) {
+              openUrl(task.url);
+            }
           }
         }
-        if (key.name === 'k' || key.name === 'up') {
-          if (this.selectedSessionIdx > 0) {
-            this.selectedSessionIdx--;
-            this.updateUI();
-          }
-        }
+
         if (key.name === 'n') this.createNewSession();
         if (key.name === 'e') {
           this.mode = 'options';
           this.updateUI();
         }
         if (key.name === 'v') this.toggleHeadless();
+        if (key.name === 'c') {
+          if (s && s.isVerifying) {
+            s.isVerifying = false;
+            eventBus.emit('verification_resolved', { sessionId: s.id });
+            log(`[TUI] 使用者已確認驗證完成 (${s.id})`);
+            this.updateUI();
+          }
+        }
       } 
       // OPTIONS MODE
       else if (this.mode === 'options') {
@@ -156,7 +283,6 @@ export class BlessedUI {
         if (key.name === 'e') this.enterMode('execute');
         if (key.name === 'r') this.enterMode('rename');
         if (key.name === 'l') {
-          const s = this.sessions[this.selectedSessionIdx];
           if (s) this.queueEngine.addTask(s.id, 'MANUAL_LOGIN');
           this.mode = 'normal';
           this.updateUI();
@@ -165,6 +291,7 @@ export class BlessedUI {
           if (this.sessions.length > 1) {
             this.sessions.splice(this.selectedSessionIdx, 1);
             this.selectedSessionIdx = 0;
+            this.saveSessions();
           }
           this.mode = 'normal';
           this.updateUI();
@@ -178,10 +305,14 @@ export class BlessedUI {
       if (value && value.trim() && s) {
         if (this.mode === 'execute') {
           log(`[TUI] Submitting goal for ${s.name}: ${value}`);
+          s.updatedAt = new Date().toISOString();
+          this.saveSessions();
           this.queueEngine.addTask(s.id, value);
         } else if (this.mode === 'rename') {
           const oldName = s.name;
           s.name = value;
+          s.updatedAt = new Date().toISOString();
+          this.saveSessions();
           log(`[TUI] Renamed session ${s.id}: ${oldName} -> ${value}`);
         }
       }
@@ -207,6 +338,21 @@ export class BlessedUI {
       if (this.logs.length > 50) this.logs.shift();
       this.updateLogArea();
     });
+
+    eventBus.on('verification_needed', (data: { sessionId: string }) => {
+      const s = this.sessions.find(s => s.id === data.sessionId);
+      if (s) {
+        this.questionBox.ask(`偵測到機器人攔截 (${s.name})\n是否開啟瀏覽器視窗手動排除？`, (err, value) => {
+          if (value) {
+            s.isVerifying = true;
+            eventBus.emit('verification_accepted', { sessionId: s.id });
+          } else {
+            eventBus.emit('verification_denied', { sessionId: s.id });
+          }
+          this.updateUI();
+        });
+      }
+    });
   }
 
   private enterMode(newMode: 'execute' | 'rename') {
@@ -229,7 +375,14 @@ export class BlessedUI {
   private createNewSession() {
     const now = new Date().toLocaleTimeString();
     const newId = Math.random().toString(36).substring(7);
-    this.sessions.push({ id: newId, name: `Session - ${now}`, headless: false });
+    const newSession: PersistedSession = { 
+      id: newId, 
+      name: `Session - ${now}`, 
+      headless: false,
+      updatedAt: new Date().toISOString()
+    };
+    this.sessions.push(newSession);
+    this.saveSessions();
     log(`[TUI] Created new session: ${newId}`);
     this.updateUI();
   }
@@ -238,44 +391,153 @@ export class BlessedUI {
     const s = this.sessions[this.selectedSessionIdx];
     if (s) {
       s.headless = !s.headless;
+      s.updatedAt = new Date().toISOString();
+      this.saveSessions();
       log(`[TUI] Session ${s.id} headless: ${s.headless}`);
       this.updateUI();
     }
   }
 
+  private loadSessions() {
+    try {
+      if (fs.existsSync(this.sessionsFilePath)) {
+        const data = fs.readFileSync(this.sessionsFilePath, 'utf8');
+        this.sessions = JSON.parse(data);
+      } else {
+        this.sessions = [{ 
+          id: 'default', 
+          name: 'Default Session', 
+          headless: true,
+          updatedAt: new Date().toISOString()
+        }];
+        this.saveSessions();
+      }
+    } catch (e) {
+      log(`[TUI] Failed to load sessions: ${e}`, 'error');
+      this.sessions = [{ 
+        id: 'default', 
+        name: 'Default Session', 
+        headless: true,
+        updatedAt: new Date().toISOString()
+      }];
+    }
+  }
+
+  private saveSessions() {
+    try {
+      if (!fs.existsSync(this.storagePath)) {
+        fs.mkdirSync(this.storagePath, { recursive: true });
+      }
+      fs.writeFileSync(this.sessionsFilePath, JSON.stringify(this.sessions, null, 2));
+    } catch (e) {
+      log(`[TUI] Failed to save sessions: ${e}`, 'error');
+    }
+  }
+
   private updateUI() {
     const tasksTotal = this.queueEngine.getTasks().length;
-    this.header.setContent(` AI BROWSER AGENT TUI | SESSIONS: ${this.sessions.length} | TASKS: ${tasksTotal}`);
+    this.header.setContent(` INVISIBROW TUI | SESSIONS: ${this.sessions.length} | TASKS: ${tasksTotal}`);
 
-    // Update Sidebar
-    const items = this.sessions.map((s, i) => {
-      const prefix = i === this.selectedSessionIdx ? '▶ ' : '  ';
-      const mode = s.headless ? '(H)' : '(G)';
-      return `${prefix}${s.name.padEnd(25).substring(0, 25)} ${mode}`;
+    // Sort sessions by updatedAt DESC
+    this.sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+    const today = new Date().toDateString();
+    const todaySessions: PersistedSession[] = [];
+    const olderSessions: PersistedSession[] = [];
+
+    this.sessions.forEach(s => {
+      if (new Date(s.updatedAt).toDateString() === today) {
+        todaySessions.push(s);
+      } else {
+        olderSessions.push(s);
+      }
     });
-    this.sidebar.setItems(items);
-    this.sidebar.select(this.selectedSessionIdx);
+
+    // Build sidebar items with grouping
+    const sidebarItems: string[] = [];
+    let sessionCount = 0;
+
+    if (todaySessions.length > 0) {
+      sidebarItems.push('{center}{yellow-fg}--- TODAY ---{/}{/}');
+      todaySessions.forEach(s => {
+      const prefix = sessionCount === this.selectedSessionIdx ? '▶ ' : '  ';
+      const mode = s.headless ? '(H)' : '(G)';
+      const verifyTag = s.isVerifying ? ' {red-bg}{white-fg}[VERIFY]{/}' : '';
+      sidebarItems.push(`${prefix}${s.name.padEnd(25).substring(0, 25)} ${mode}${verifyTag}`);
+      sessionCount++;
+    });
+  }
+
+  if (olderSessions.length > 0) {
+    sidebarItems.push('{center}{grey-fg}--- OLDER ---{/}{/}');
+    olderSessions.forEach(s => {
+      const prefix = sessionCount === this.selectedSessionIdx ? '▶ ' : '  ';
+      const mode = s.headless ? '(H)' : '(G)';
+      const verifyTag = s.isVerifying ? ' {red-bg}{white-fg}[VERIFY]{/}' : '';
+      sidebarItems.push(`${prefix}${s.name.padEnd(25).substring(0, 25)} ${mode}${verifyTag}`);
+      sessionCount++;
+    });
+  }
+
+    this.sidebar.setItems(sidebarItems);
+    
+    // Map selectedSessionIdx to UI index (skipping separators)
+    if (this.sessions.length > 0) {
+      let uiIdx = 0;
+      let currentSessionCount = 0;
+      for (let i = 0; i < sidebarItems.length; i++) {
+          const item = sidebarItems[i];
+          if (item && (item.includes('--- TODAY ---') || item.includes('--- OLDER ---'))) continue;
+          if (currentSessionCount === this.selectedSessionIdx) {
+              uiIdx = i;
+              break;
+          }
+          currentSessionCount++;
+      }
+      this.sidebar.select(uiIdx);
+    }
+
+    this.sidebar.style.border.fg = this.focusPane === 'sidebar' ? 'cyan' : 'gray';
+    this.taskArea.style.border.fg = this.focusPane === 'tasks' ? 'cyan' : 'white';
 
     // Update Tasks
-    const currentSession = this.sessions[this.selectedSessionIdx];
+    const currentSession = this.sessions[this.selectedSessionIdx] as PersistedSession | undefined;
     if (currentSession) {
       const tasks = this.queueEngine.getTasks().filter((t: AgentTask) => t.sessionId === currentSession.id);
-      let taskContent = `{yellow-fg}{bold}${currentSession.name.toUpperCase()}{/}\n\n`;
+      
+      const taskItems: string[] = [];
       if (tasks.length === 0) {
-        taskContent += '{grey-fg}No tasks yet. Press "e" -> "e" to add one.{/}';
+        taskItems.push('{grey-fg}No tasks yet. Press "e" -> "e" to add one.{/}');
       } else {
-      tasks.forEach((t: AgentTask) => {
-        const color = t.status === 'running' ? 'yellow' : t.status === 'completed' ? 'green' : 'white';
-        taskContent += `{${color}-fg}• [${t.status.toUpperCase()}] ${t.goal}{/}\n`;
-        if (t.result) {
-          taskContent += `  {white-fg}└─ Ans: ${t.result}{/}\n`;
-        }
-        if (t.url) {
-          taskContent += `  {blue-fg}└─ URL: ${t.url}{/}\n`;
-        }
-      });
+        tasks.forEach((t: AgentTask, i: number) => {
+          const color = t.status === 'running' ? 'yellow' : t.status === 'completed' ? 'green' : 'white';
+          const prefix = (this.focusPane === 'tasks' && i === this.selectedTaskIdx) ? '▶ ' : '  ';
+          taskItems.push(`${prefix}{${color}-fg}[${t.status.toUpperCase()}] ${t.goal}{/}`);
+          if (t.result) {
+            taskItems.push(`    {white-fg}└─ Ans: ${t.result}{/}`);
+          }
+          if (t.url) {
+            const displayUrl = t.url.length > 60 ? t.url.substring(0, 57) + '...' : t.url;
+            taskItems.push(`    {blue-fg}└─ URL: ${displayUrl}{/}`);
+          }
+        });
       }
-      this.taskArea.setContent(taskContent);
+      this.taskArea.setItems(taskItems);
+      if (this.focusPane === 'tasks') {
+        // Need to calculate correct UI index for tasks (including sub-lines)
+        let uiTaskIdx = 0;
+        let count = 0;
+        for (let i = 0; i < tasks.length; i++) {
+          if (i === this.selectedTaskIdx) {
+            uiTaskIdx = count;
+            break;
+          }
+          count++; // The main task line
+          if (tasks[i].result) count++;
+          if (tasks[i].url) count++;
+        }
+        this.taskArea.select(uiTaskIdx);
+      }
     }
 
     // Update Command Bar based on Mode
@@ -285,9 +547,25 @@ export class BlessedUI {
   }
 
   private updateCommandBar() {
+    const s = this.sessions[this.selectedSessionIdx];
     if (this.mode === 'normal') {
       this.commandBar.style.border.fg = 'gray';
-      this.commandBar.setContent(' [e] Actions | [n] New Session | [v] Toggle Headless | [j/k] Select | Ctrl+C Exit');
+      let content = '';
+      if (this.focusPane === 'sidebar') {
+        content = ' [Tab] Switch to Tasks | [e] Actions | [n] New Session | [v] Toggle Headless | [j/k] Select | Ctrl+C Exit';
+      } else {
+        content = ' [Tab] Switch to Sidebar | [y] Copy URL | [o] Open URL | [j/k] Select Task';
+        const tasks = this.queueEngine.getTasks().filter(t => t.sessionId === s?.id);
+        const selectedTask = tasks[this.selectedTaskIdx];
+        if (selectedTask && selectedTask.url) {
+          content += ` | {yellow-fg}Click URL line to Copy{/}`;
+        }
+      }
+      
+      if (s && s.isVerifying) {
+        content = ' {red-bg}{white-fg}[c] Confirm Verification Done{/} |' + content;
+      }
+      this.commandBar.setContent(content);
     } 
     else if (this.mode === 'options') {
       this.commandBar.style.border.fg = 'yellow';
