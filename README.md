@@ -1,4 +1,4 @@
-# AI Browser Agent (agent_surf) 🚀
+# Invisibrow 🚀
 
 這是一個基於 Puppeteer 與 OpenAI 的自動化瀏覽器 Agent，旨在模擬人類行為進行網頁分析與導覽。
 

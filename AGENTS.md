@@ -1,4 +1,4 @@
-# AI Browser Agent TUI 管理平台開發指南
+# Invisibrow TUI 管理平台開發指南
 
 本文件為 Agent（如 Opencode）提供「長駐式 TUI 管理平台」的開發規範。
 
