@@ -535,43 +535,34 @@ export class BlessedUI {
     // Sort sessions by updatedAt DESC
     this.sessions.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
+    // Group sessions by date
     const today = new Date().toDateString();
-    const todaySessions: PersistedSession[] = [];
-    const olderSessions: PersistedSession[] = [];
-
+    const groups: { [date: string]: PersistedSession[] } = {};
+    
     this.sessions.forEach(s => {
-      if (new Date(s.updatedAt).toDateString() === today) {
-        todaySessions.push(s);
-      } else {
-        olderSessions.push(s);
-      }
+      const dateStr = new Date(s.updatedAt).toDateString();
+      if (!groups[dateStr]) groups[dateStr] = [];
+      groups[dateStr].push(s);
     });
+
+    const sortedDates = Object.keys(groups).sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
 
     // Build sidebar items with grouping
     const sidebarItems: string[] = [];
     let sessionCount = 0;
 
-    if (todaySessions.length > 0) {
-      sidebarItems.push('{center}{yellow-fg}--- TODAY ---{/}{/}');
-      todaySessions.forEach(s => {
+    sortedDates.forEach(dateStr => {
+      const label = dateStr === today ? 'TODAY' : dateStr.toUpperCase();
+      sidebarItems.push(`{center}{yellow-fg}--- ${label} ---{/}{/}`);
+      
+      groups[dateStr].forEach(s => {
         const prefix = sessionCount === this.selectedSessionIdx ? '▶ ' : '  ';
         const mode = s.headless ? '(H)' : '(G)';
         const verifyTag = s.isVerifying ? ' {red-bg}{white-fg}[VERIFY]{/}' : '';
         sidebarItems.push(`${prefix}${s.name.padEnd(25).substring(0, 25)} ${mode}${verifyTag}`);
         sessionCount++;
       });
-    }
-
-    if (olderSessions.length > 0) {
-      sidebarItems.push('{center}{grey-fg}--- OLDER ---{/}{/}');
-      olderSessions.forEach(s => {
-        const prefix = sessionCount === this.selectedSessionIdx ? '▶ ' : '  ';
-        const mode = s.headless ? '(H)' : '(G)';
-        const verifyTag = s.isVerifying ? ' {red-bg}{white-fg}[VERIFY]{/}' : '';
-        sidebarItems.push(`${prefix}${s.name.padEnd(25).substring(0, 25)} ${mode}${verifyTag}`);
-        sessionCount++;
-      });
-    }
+    });
 
     this.sidebar.setItems(sidebarItems);
     
@@ -581,7 +572,7 @@ export class BlessedUI {
       let currentSessionCount = 0;
       for (let i = 0; i < sidebarItems.length; i++) {
           const item = sidebarItems[i];
-          if (item && (item.includes('--- TODAY ---') || item.includes('--- OLDER ---'))) continue;
+          if (item && item.includes('---') && item.includes('---')) continue;
           if (currentSessionCount === this.selectedSessionIdx) {
               uiIdx = i;
               break;
