@@ -29,6 +29,8 @@ export class BlessedUI {
   private mode: UIMode = 'normal';
   private storagePath: string;
   private sessionsFilePath: string;
+  private inputHistory: string[] = [];
+  private historyIdx = -1;
 
   // Layout Components
   private header: blessed.Widgets.BoxElement;
@@ -184,8 +186,10 @@ export class BlessedUI {
 
     this.sidebar.on('select', () => {
       this.focusPane = 'sidebar';
+      this.syncSessionConfig();
       this.updateUI();
     });
+
 
     this.taskArea.on('select', (item: any, index: number) => {
       this.focusPane = 'tasks';
@@ -330,6 +334,12 @@ export class BlessedUI {
       const s = this.sessions[this.selectedSessionIdx];
       if (value && value.trim() && s) {
         if (this.mode === 'execute') {
+          // Add to history if unique
+          if (this.inputHistory[0] !== value) {
+            this.inputHistory.unshift(value);
+          }
+          this.historyIdx = -1;
+
           log(`[TUI] Submitting goal for ${s.name}: ${value}`);
           s.updatedAt = new Date().toISOString();
           
@@ -368,10 +378,34 @@ export class BlessedUI {
     this.commandInput.on('cancel', () => {
       log(`[TUI] Input cancelled (Mode: ${this.mode})`);
       this.mode = 'normal';
+      this.historyIdx = -1;
       this.commandInput.clearValue();
       this.commandInput.hide();
       this.updateUI();
       this.sidebar.focus();
+    });
+
+    this.commandInput.key(['up'], () => {
+      if (this.mode === 'execute' && this.inputHistory.length > 0) {
+        if (this.historyIdx < this.inputHistory.length - 1) {
+          this.historyIdx++;
+          this.commandInput.setValue(this.inputHistory[this.historyIdx]);
+          this.screen.render();
+        }
+      }
+    });
+
+    this.commandInput.key(['down'], () => {
+      if (this.mode === 'execute') {
+        if (this.historyIdx > 0) {
+          this.historyIdx--;
+          this.commandInput.setValue(this.inputHistory[this.historyIdx]);
+        } else if (this.historyIdx === 0) {
+          this.historyIdx = -1;
+          this.commandInput.setValue('');
+        }
+        this.screen.render();
+      }
     });
 
     // Log listener
@@ -477,8 +511,20 @@ export class BlessedUI {
         fs.mkdirSync(this.storagePath, { recursive: true });
       }
       fs.writeFileSync(this.sessionsFilePath, JSON.stringify(this.sessions, null, 2));
+      this.syncSessionConfig();
     } catch (e) {
       log(`[TUI] Failed to save sessions: ${e}`, 'error');
+    }
+  }
+
+  private syncSessionConfig() {
+    const currentSession = this.sessions[this.selectedSessionIdx];
+    if (currentSession) {
+      this.queueEngine.setSessionConfig(currentSession.id, {
+        id: currentSession.id,
+        name: currentSession.name,
+        headless: currentSession.headless
+      });
     }
   }
 

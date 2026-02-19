@@ -1,10 +1,10 @@
-import OpenAI from 'openai';
 import { getConfig } from '../../utils/config';
 import type { IAgent, AgentResponse, PlanerStep } from '../../core/types';
 import { BrowserAgent } from '../browser';
 import { WatchdogAgent } from '../watchdog';
 import { log } from '../../utils/logger';
 import { memoryService } from '../../core/memory';
+import OpenAI from 'openai';
 
 export interface PlanerInput {
   goal: string;
@@ -39,26 +39,31 @@ export class PlanerAgent implements IAgent<PlanerInput, PlanerOutput> {
   private model: string;
   private browserAgent: BrowserAgent | null = null;
   private watchdog: WatchdogAgent;
+  private sessionId: string = 'default';
 
   constructor() {
     const config = getConfig();
     this.model = config.models.planerAgent;
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
+      baseURL: process.env.OPENAI_BASE_URL
     });
     this.watchdog = new WatchdogAgent();
   }
 
-  private getBrowserAgent(sessionId: string): BrowserAgent {
+  private getBrowserAgent(sessionId: string, headless: boolean = true): BrowserAgent {
     if (!this.browserAgent || this.browserAgent.sessionId !== sessionId) {
-      this.browserAgent = new BrowserAgent(sessionId);
+      this.browserAgent = new BrowserAgent(sessionId, headless);
     }
+    this.browserAgent.setHeadless(headless);
     return this.browserAgent;
   }
 
   async execute(taskId: string, input: PlanerInput): Promise<AgentResponse<PlanerOutput>> {
-    const { goal, sessionId } = input;
-    const browser = this.getBrowserAgent(sessionId);
+    const { goal, sessionId, headless } = input as any;
+    this.sessionId = sessionId;
+    const browser = this.getBrowserAgent(sessionId, headless);
+    this.watchdog = new WatchdogAgent(sessionId);
     const history: string[] = [];
     let currentStep = 0;
     const maxSteps = 15;
@@ -78,17 +83,6 @@ export class PlanerAgent implements IAgent<PlanerInput, PlanerOutput> {
         
         const pageState = await browser.getPageState();
         
-        if (currentStep > 1) {
-          const watchdogRes = await this.watchdog.execute(taskId, {
-            goal,
-            state: pageState,
-            history
-          });
-          if (watchdogRes.status === 'intervention') {
-            log(`[Planer] Watchdog 觸發介入: ${watchdogRes.data.reason}`, 'warn');
-          }
-        }
-
         const step = await this.planNextStep(goal, pageState, history, memoryContext);
         log(`[Planer] Step ${currentStep}: ${step.thought}`);
         history.push(`Thought: ${step.thought}`);
@@ -114,8 +108,25 @@ export class PlanerAgent implements IAgent<PlanerInput, PlanerOutput> {
           };
         }
 
+        // 只有在還沒完成任務（command !== 'finish'）且不是第一步時，才進行 Watchdog 檢查
+        if (currentStep > 1) {
+          const watchdogRes = await this.watchdog.execute(taskId, {
+            goal,
+            state: pageState,
+            history
+          });
+          if (watchdogRes.status === 'intervention') {
+            log(`[Planer] Watchdog 觸發介入: ${watchdogRes.data.reason}`, 'warn');
+          }
+        }
+
         if (step.command === 'browser') {
-          const browserRes = await browser.execute(taskId, step.input);
+          // 確保傳遞給 BrowserAgent 的是字串，避免 [object Object] 錯誤
+          const browserGoal = typeof step.input === 'string' 
+            ? step.input 
+            : (step.input.goal || JSON.stringify(step.input));
+            
+          const browserRes = await browser.execute(taskId, browserGoal);
           if (browserRes.status === 'failed') {
             throw new Error(`Browser 執行失敗: ${browserRes.message}`);
           }

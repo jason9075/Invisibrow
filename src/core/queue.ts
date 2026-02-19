@@ -97,7 +97,11 @@ export class QueueEngine {
           task.result = "這是一個 Mock 的任務結果，用來測試 TUI 的顯示效果。";
           task.url = "https://www.google.com/search?q=this+is+a+very+long+url+to+test+truncation+logic+in+the+tui&sca_esv=123456&source=hp&ei=abcdef";
         } else {
-          const res = await this.planer.execute(taskId, { goal, sessionId });
+          const res = await this.planer.execute(taskId, { 
+            goal, 
+            sessionId,
+            headless: config?.headless ?? true 
+          } as any);
           task.result = res.data.answer;
           task.url = res.data.url;
           if (res.status === 'failed') {

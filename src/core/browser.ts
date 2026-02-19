@@ -18,9 +18,22 @@ export class BrowserManager {
   }
 
   async init() {
-    if (this.browser && this.browser.isConnected()) return;
+    // 檢查舊的啟動參數
+    let isHeadlessChanged = false;
+    if (this.browser && this.browser.isConnected()) {
+      try {
+        const oldOptions = this.browser.process()?.spawnargs || [];
+        const isActuallyHeadless = oldOptions.some((arg: string) => arg.includes('--headless'));
+        isHeadlessChanged = isActuallyHeadless !== this.headless;
+      } catch (e) {
+        isHeadlessChanged = true;
+      }
+    }
+
+    if (this.browser && this.browser.isConnected() && !isHeadlessChanged) return;
 
     if (this.browser) {
+      log(`[BrowserManager][${this.sessionId}] 偵測到 Headless 狀態改變或連線中斷，正在重新啟動...`);
       await this.close();
     }
 
@@ -28,19 +41,27 @@ export class BrowserManager {
     const userDataDir = path.join(homeDir, '.local', 'share', 'invisibrow', 'storage', 'session', this.sessionId);
     log(`[BrowserManager][${this.sessionId}] 啟動瀏覽器 (Headless: ${this.headless}, userDataDir: ${userDataDir})`);
 
-    this.browser = await puppeteer.launch({
-      executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
-      headless: this.headless as any,
-      userDataDir,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-blink-features=AutomationControlled',
-        '--window-size=1280,800',
-        '--lang=zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7'
-      ],
-      defaultViewport: { width: 1280, height: 800 }
-    });
+    try {
+      this.browser = await (puppeteer as any).launch({
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH,
+        headless: this.headless,
+        userDataDir,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-blink-features=AutomationControlled',
+          '--window-size=1280,800',
+          '--lang=zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+          this.headless ? '' : '--start-maximized'
+        ].filter(Boolean),
+        defaultViewport: this.headless ? { width: 1280, height: 800 } : null
+      });
+    } catch (launchError: any) {
+      log(`[BrowserManager][${this.sessionId}] 啟動失敗: ${launchError.message}`, 'error');
+      // 清理狀態以允許下一次嘗試
+      this.browser = null;
+      throw launchError;
+    }
 
     this.browser.on('disconnected', () => {
       log(`[BrowserManager][${this.sessionId}] 瀏覽器連線中斷`, 'warn');

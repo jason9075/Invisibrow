@@ -1,9 +1,9 @@
-import OpenAI from 'openai';
 import { z } from 'zod';
 import { log, eventBus } from '../../utils/logger';
 import { BrowserManager } from '../../core/browser';
 import type { IAgent, AgentResponse } from '../../core/types';
 import { WatchdogAgent } from '../watchdog';
+import OpenAI from 'openai';
 
 const ActionSchema = z.object({
   thought: z.string(),
@@ -43,9 +43,15 @@ export class BrowserAgent implements IAgent<string, { answer: string; url: strin
     this.browserMgr = new BrowserManager(sessionId, headless);
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
+      baseURL: process.env.OPENAI_BASE_URL
     });
-    this.watchdog = new WatchdogAgent();
+    this.watchdog = new WatchdogAgent(sessionId);
   }
+
+  public setHeadless(val: boolean) {
+    this.browserMgr.setHeadless(val);
+  }
+
 
   async execute(taskId: string, goal: string): Promise<AgentResponse<{ answer: string; url: string }>> {
     try {
@@ -187,7 +193,7 @@ export class BrowserAgent implements IAgent<string, { answer: string; url: strin
 
   private async getDecision(goal: string, state: any, history: string[]) {
     const response = await this.openai.chat.completions.create({
-      model: process.env.OPENAI_MODEL || 'gpt-4o',
+      model: 'gpt-4o-mini',
       messages: [
         { 
           role: 'system', 

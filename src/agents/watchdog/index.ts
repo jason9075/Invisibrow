@@ -1,6 +1,6 @@
-import OpenAI from 'openai';
 import { getConfig } from '../../utils/config';
 import type { IAgent, AgentResponse, AgentCard } from '../../core/types';
+import OpenAI from 'openai';
 
 export interface WatchdogInput {
   goal: string;
@@ -34,12 +34,15 @@ export class WatchdogAgent implements IAgent<WatchdogInput, WatchdogOutput> {
   
   private openai: OpenAI;
   private model: string;
+  public sessionId: string = 'default';
 
-  constructor() {
+  constructor(sessionId?: string) {
+    if (sessionId) this.sessionId = sessionId;
     const config = getConfig();
     this.model = config.models.watchdogAgent;
     this.openai = new OpenAI({
       apiKey: process.env.OPENAI_API_KEY,
+      baseURL: process.env.OPENAI_BASE_URL
     });
   }
 
@@ -80,7 +83,7 @@ export class WatchdogAgent implements IAgent<WatchdogInput, WatchdogOutput> {
         response_format: { type: 'json_object' }
       });
 
-      const content = response.choices[0]?.message.content;
+      const content = response.choices[0].message.content;
       if (!content) throw new Error('Watchdog Agent returned empty response');
       
       const data = JSON.parse(content) as WatchdogOutput;
