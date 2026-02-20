@@ -59,8 +59,8 @@ export class PlanerAgent implements IAgent<PlanerInput, PlanerOutput> {
     return this.browserAgent;
   }
 
-  async execute(taskId: string, input: PlanerInput): Promise<AgentResponse<PlanerOutput>> {
-    const { goal, sessionId, headless } = input as any;
+  async execute(taskId: string, input: PlanerInput & { signal?: AbortSignal }): Promise<AgentResponse<PlanerOutput>> {
+    const { goal, sessionId, headless, signal } = input as any;
     this.sessionId = sessionId;
     const browser = this.getBrowserAgent(sessionId, headless);
     this.watchdog = new WatchdogAgent(sessionId);
@@ -79,6 +79,10 @@ export class PlanerAgent implements IAgent<PlanerInput, PlanerOutput> {
         : '';
 
       while (currentStep < maxSteps) {
+        if (signal?.aborted) {
+          throw new Error('User aborted');
+        }
+
         currentStep++;
         
         const pageState = await browser.getPageState();
@@ -110,6 +114,7 @@ export class PlanerAgent implements IAgent<PlanerInput, PlanerOutput> {
 
         // 只有在還沒完成任務（command !== 'finish'）且不是第一步時，才進行 Watchdog 檢查
         if (currentStep > 1) {
+          if (signal?.aborted) throw new Error('User aborted');
           const watchdogRes = await this.watchdog.execute(taskId, {
             goal,
             state: pageState,
@@ -121,6 +126,7 @@ export class PlanerAgent implements IAgent<PlanerInput, PlanerOutput> {
         }
 
         if (step.command === 'browser') {
+          if (signal?.aborted) throw new Error('User aborted');
           // 確保傳遞給 BrowserAgent 的是字串，避免 [object Object] 錯誤
           const browserGoal = typeof step.input === 'string' 
             ? step.input 
@@ -132,7 +138,14 @@ export class PlanerAgent implements IAgent<PlanerInput, PlanerOutput> {
           }
           history.push(`Action Result: ${browserRes.data.answer}`);
         } else if (step.command === 'wait') {
-          await new Promise(r => setTimeout(r, 5000));
+          if (signal?.aborted) throw new Error('User aborted');
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, 5000);
+            signal?.addEventListener('abort', () => {
+              clearTimeout(timer);
+              reject(new Error('User aborted'));
+            }, { once: true });
+          });
         }
       }
 

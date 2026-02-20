@@ -8,7 +8,7 @@ export interface AgentTask {
   id: string;
   sessionId: string;
   goal: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
   result?: string;
   url?: string;
   error?: string;
@@ -25,6 +25,7 @@ export interface SessionConfig {
 export class QueueEngine {
   private queue: PQueue;
   private tasks: Map<string, AgentTask> = new Map();
+  private runningAborts: Map<string, AbortController> = new Map();
   private planer: PlanerAgent;
   private sessionConfigs: Map<string, SessionConfig> = new Map();
   private storagePath: string;
@@ -46,7 +47,14 @@ export class QueueEngine {
       if (fs.existsSync(this.tasksFilePath)) {
         const data = fs.readFileSync(this.tasksFilePath, 'utf8');
         const parsedTasks: AgentTask[] = JSON.parse(data);
-        parsedTasks.forEach(t => this.tasks.set(t.id, t));
+        parsedTasks.forEach(t => {
+          // 重置載入時仍處於 running/pending 的任務狀態為 failed 或待定
+          if (t.status === 'running' || t.status === 'pending') {
+            t.status = 'failed';
+            t.error = '任務因系統重啟而中斷';
+          }
+          this.tasks.set(t.id, t);
+        });
         log(`[Queue] 已載入 ${parsedTasks.length} 個歷史任務`);
       }
     } catch (e) {
@@ -70,6 +78,21 @@ export class QueueEngine {
     this.sessionConfigs.set(id, config);
   }
 
+  async stopTask(taskId: string) {
+    const task = this.tasks.get(taskId);
+    if (task && task.status === 'running') {
+      const controller = this.runningAborts.get(taskId);
+      if (controller) {
+        controller.abort();
+        log(`[Queue] 已發送停止信號給任務 ${taskId}`);
+      }
+      task.status = 'cancelled';
+      task.completedAt = new Date().toISOString();
+      task.error = '使用者手動停止';
+      this.saveTasks();
+    }
+  }
+
   async addTask(sessionId: string, goal: string) {
     const taskId = Math.random().toString(36).substring(7);
     const task: AgentTask = { 
@@ -83,8 +106,16 @@ export class QueueEngine {
     this.saveTasks();
 
     const config = this.sessionConfigs.get(sessionId);
+    const controller = new AbortController();
+    this.runningAborts.set(taskId, controller);
 
     this.queue.add(async () => {
+      // 檢查是否在排隊期間被取消
+      if (task.status === 'cancelled') {
+        this.runningAborts.delete(taskId);
+        return;
+      }
+
       task.status = 'running';
       this.saveTasks();
       log(`[Queue] 開始執行任務 ${taskId} (Session: ${sessionId})`);
@@ -93,15 +124,31 @@ export class QueueEngine {
         if (process.env.UI_TEST === 'true') {
           const sleepTime = Math.floor(Math.random() * 5000) + 2000;
           log(`[UI-TEST] 模擬執行中... (${sleepTime}ms)`);
-          await new Promise(r => setTimeout(r, sleepTime));
+          
+          // 模擬可中斷的 sleep
+          await new Promise((resolve, reject) => {
+            const timer = setTimeout(resolve, sleepTime);
+            controller.signal.addEventListener('abort', () => {
+              clearTimeout(timer);
+              reject(new Error('User aborted'));
+            });
+          });
+
           task.result = "這是一個 Mock 的任務結果，用來測試 TUI 的顯示效果。";
           task.url = "https://www.google.com/search?q=this+is+a+very+long+url+to+test+truncation+logic+in+the+tui&sca_esv=123456&source=hp&ei=abcdef";
         } else {
+          // 傳遞 signal 給 planer (需要 planer 支援)
           const res = await this.planer.execute(taskId, { 
             goal, 
             sessionId,
-            headless: config?.headless ?? true 
+            headless: config?.headless ?? true,
+            signal: controller.signal
           } as any);
+          
+          if (controller.signal.aborted) {
+             throw new Error('User aborted');
+          }
+
           task.result = res.data.answer;
           task.url = res.data.url;
           if (res.status === 'failed') {
@@ -112,11 +159,17 @@ export class QueueEngine {
         task.completedAt = new Date().toISOString();
         log(`[Queue] 任務 ${taskId} 完成`);
       } catch (error: any) {
-        task.status = 'failed';
+        if (error.message === 'User aborted') {
+          task.status = 'cancelled';
+          log(`[Queue] 任務 ${taskId} 已取消`);
+        } else {
+          task.status = 'failed';
+          task.error = error.message;
+          log(`[Queue] 任務 ${taskId} 失敗: ${error.message}`, 'error');
+        }
         task.completedAt = new Date().toISOString();
-        task.error = error.message;
-        log(`[Queue] 任務 ${taskId} 失敗: ${error.message}`, 'error');
       } finally {
+        this.runningAborts.delete(taskId);
         this.saveTasks();
       }
     });

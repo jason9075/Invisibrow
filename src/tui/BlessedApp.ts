@@ -31,6 +31,7 @@ export class BlessedUI {
   private sessionsFilePath: string;
   private inputHistory: string[] = [];
   private historyIdx = -1;
+  private spinnerFrames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
   // Layout Components
   private header: blessed.Widgets.BoxElement;
@@ -60,7 +61,7 @@ export class BlessedUI {
 
     const headerHeight = 1;
     const commandBarHeight = 3;
-    const logHeight = 6;
+    const logHeight = 9;
     const sidebarWidth = 40;
     const infoHeight = 4;
 
@@ -204,6 +205,7 @@ export class BlessedUI {
         const t = tasks[i] as AgentTask;
         const taskStart = count;
         count++; // Goal
+        const resultLine = t.result ? count : -1;
         if (t.result) count++; // Result line
         const urlLine = t.url ? count : -1;
         if (t.url) count++; // URL line
@@ -212,6 +214,8 @@ export class BlessedUI {
           this.selectedTaskIdx = i;
           if (index === urlLine && t.url) {
             copyToClipboard(t.url);
+          } else if (index === resultLine && t.result) {
+            copyToClipboard(t.result);
           }
           break;
         }
@@ -223,7 +227,7 @@ export class BlessedUI {
     this.updateUI();
     this.sidebar.focus();
     
-    setInterval(() => this.updateUI(), 1000);
+    setInterval(() => this.updateUI(), 150);
   }
 
   private setupEvents() {
@@ -277,8 +281,21 @@ export class BlessedUI {
           }
           if (key.name === 'y') {
             const task = tasks[this.selectedTaskIdx];
-            if (task && task.url) {
-              copyToClipboard(task.url);
+            if (task) {
+              if (task.url) {
+                copyToClipboard(task.url);
+                log(`[TUI] Copied URL to clipboard`);
+              } else if (task.result) {
+                copyToClipboard(task.result);
+                log(`[TUI] Copied Result to clipboard`);
+              }
+            }
+          }
+          if (key.name === 'r') {
+            const task = tasks[this.selectedTaskIdx];
+            if (task && task.result) {
+              copyToClipboard(task.result);
+              log(`[TUI] Copied Result to clipboard`);
             }
           }
           if (key.name === 'o') {
@@ -312,6 +329,17 @@ export class BlessedUI {
         }
         if (key.name === 'e') this.enterMode('execute');
         if (key.name === 'r') this.enterMode('rename');
+        if (key.name === 's') {
+          const currentSession = this.sessions[this.selectedSessionIdx];
+          const tasks = this.queueEngine.getTasks().filter(t => t.sessionId === currentSession?.id);
+          const task = tasks[this.selectedTaskIdx];
+          if (task && task.status === 'running') {
+            this.queueEngine.stopTask(task.id);
+            log(`[TUI] 使用者停止任務: ${task.id}`);
+            this.mode = 'normal';
+            this.updateUI();
+          }
+        }
         if (key.name === 'l') {
           if (s) this.queueEngine.addTask(s.id, 'MANUAL_LOGIN');
           this.mode = 'normal';
@@ -606,11 +634,22 @@ export class BlessedUI {
       if (tasks.length === 0) {
         taskItems.push('{grey-fg}No tasks yet. Press "e" -> "e" to add one.{/}');
       } else {
+        const spinnerIdx = Math.floor(Date.now() / 150) % this.spinnerFrames.length;
         tasks.forEach((t: AgentTask, i: number) => {
-          const color = t.status === 'running' ? 'yellow' : t.status === 'completed' ? 'green' : 'white';
+          let color = 'white';
+          if (t.status === 'running') color = 'yellow';
+          else if (t.status === 'completed') color = 'green';
+          else if (t.status === 'failed') color = 'red';
+
           const prefix = (this.focusPane === 'tasks' && i === this.selectedTaskIdx) ? '▶ ' : '  ';
           const timeInfo = t.completedAt ? ` {grey-fg}(Done: ${new Date(t.completedAt).toLocaleTimeString()}){/}` : '';
-          taskItems.push(`${prefix}{${color}-fg}[${t.status.toUpperCase()}] ${t.goal}{/}${timeInfo}`);
+          
+          let statusText = t.status.toUpperCase();
+          if (t.status === 'running') {
+            statusText = `${this.spinnerFrames[spinnerIdx]} RUNNING`;
+          }
+          
+          taskItems.push(`${prefix}{${color}-fg}[${statusText}] ${t.goal}{/}${timeInfo}`);
           if (t.result) {
             taskItems.push(`    {white-fg}└─ Ans: ${t.result}{/}`);
           }
@@ -652,11 +691,11 @@ export class BlessedUI {
       if (this.focusPane === 'sidebar') {
         content = ' [Tab] Switch to Tasks | [e] Actions | [n] New Session | [v] Toggle Headless | [j/k] Select | Ctrl+C Exit';
       } else {
-        content = ' [Tab] Switch to Sidebar | [y] Copy URL | [o] Open URL | [j/k] Select Task';
+        content = ' [Tab] Switch to Sidebar | [y] Copy URL/Res | [r] Copy Result | [o] Open URL | [j/k] Select Task';
         const tasks = this.queueEngine.getTasks().filter(t => t.sessionId === s?.id);
         const selectedTask = tasks[this.selectedTaskIdx];
-        if (selectedTask && selectedTask.url) {
-          content += ` | {yellow-fg}Click URL line to Copy{/}`;
+        if (selectedTask && (selectedTask.url || selectedTask.result)) {
+          content += ` | {yellow-fg}Click URL/Ans to Copy{/}`;
         }
       }
       
@@ -666,8 +705,13 @@ export class BlessedUI {
       this.commandBar.setContent(content);
     } 
     else if (this.mode === 'options') {
+      const currentSession = this.sessions[this.selectedSessionIdx];
+      const tasks = this.queueEngine.getTasks().filter(t => t.sessionId === currentSession?.id);
+      const selectedTask = tasks[this.selectedTaskIdx];
+      const stopAction = (selectedTask && selectedTask.status === 'running') ? ' | [s] Stop' : '';
+      
       this.commandBar.style.border.fg = 'yellow';
-      this.commandBar.setContent(' {yellow-fg}{bold}ACTIONS:{/} [e] Execute | [r] Rename | [l] Login | [d] Delete | [Esc] Cancel');
+      this.commandBar.setContent(` {yellow-fg}{bold}ACTIONS:{/} [e] Execute | [r] Rename${stopAction} | [l] Login | [d] Delete | [Esc] Cancel`);
     }
     else if (this.mode === 'execute') {
       this.commandBar.style.border.fg = 'cyan';
