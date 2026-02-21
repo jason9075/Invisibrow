@@ -639,7 +639,7 @@ export class BlessedUI {
           let color = 'white';
           if (t.status === 'running') color = 'yellow';
           else if (t.status === 'completed') color = 'green';
-          else if (t.status === 'failed') color = 'red';
+          else if (t.status === 'failed' || t.status === 'cancelled') color = 'red';
 
           const prefix = (this.focusPane === 'tasks' && i === this.selectedTaskIdx) ? '▶ ' : '  ';
           const timeInfo = t.completedAt ? ` {grey-fg}(Done: ${new Date(t.completedAt).toLocaleTimeString()}){/}` : '';
