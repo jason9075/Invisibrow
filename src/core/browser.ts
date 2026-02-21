@@ -57,6 +57,9 @@ export class BrowserManager {
         defaultViewport: this.headless ? { width: 1280, height: 800 } : null
       });
     } catch (launchError: any) {
+      if (launchError.message.includes('Could not find Chromium') || launchError.message.includes('executablePath') || launchError.message.includes('ENOENT')) {
+         log(`[BrowserManager] ⚠️  CRITICAL: Chromium not found! Please check your environment or Nix configuration.`, 'warn');
+      }
       log(`[BrowserManager][${this.sessionId}] 啟動失敗: ${launchError.message}`, 'error');
       // 清理狀態以允許下一次嘗試
       this.browser = null;

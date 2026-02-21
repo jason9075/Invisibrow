@@ -46,6 +46,13 @@
           shellHook = ''
             export PUPPETEER_EXECUTABLE_PATH="${pkgs.chromium}/bin/chromium"
             export PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+            
+            # Auto-install dependencies if missing
+            if [ ! -d "node_modules" ]; then
+              echo "📦 node_modules not found. Installing dependencies..."
+              bun install
+            fi
+
             echo "🛡️ AI Browser Agent Dev Shell Loaded"
             echo "Chromium: $(chromium --version)"
             echo "Bun: $(bun --version)"
