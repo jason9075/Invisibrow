@@ -8,6 +8,7 @@
 - **Stealth Mode**: 內建 `puppeteer-extra-plugin-stealth` 與行為隨機化，降低被偵測風險。
 - **AI Brain**: 使用 OpenAI GPT-4o 分析網頁內容，理解動態頁面結構。
 - **Modern Stack**: 使用 Bun 執行環境，極速開發與測試。
+- **TUI Management**: 提供基於終端機的使用者介面，方便管理多個 Agent 任務。
 
 ## 🛠 快速開始
 
@@ -28,11 +29,11 @@ nix develop
 just init
 ```
 
-### 4. 運行 Agent
-您可以直接分析任何網頁：
+### 4. 運行 TUI 管理平台
+啟動主要的 TUI 介面：
 
 ```bash
-just run https://news.ycombinator.com "有哪些關於 AI 的新聞？"
+just start
 ```
 
 ## ⚙️ 進階配置 (Model Adjustment)
@@ -57,21 +58,21 @@ just run https://news.ycombinator.com "有哪些關於 AI 的新聞？"
 
 | 指令 | 說明 |
 | :--- | :--- |
-| `just init` | 安裝專案依賴 (`bun install`) |
-| `just run <url> [query]` | 啟動 Agent 分析指定網頁 (無畫面，獨立 Session) |
-| `just gui <url> [query]` | 啟動 Agent 並顯示瀏覽器畫面 (獨立 Session) |
-| `just login [url]` | 手動登入模式 (開啟瀏覽器供您操作，按 Enter 儲存) |
-| `just auth-run <goal>` | 使用儲存的 Session 執行任務 (無畫面) |
-| `just auth-gui <goal>` | 使用儲存的 Session 執行任務 (有畫面) |
+| `just init` | 初始化環境 (`bun install`) |
+| `just start` | 啟動 TUI 管理平台 |
+| `just test-ui` | 啟動 UI 測試模式 (Fake Tasks) |
 | `just lint` | 執行程式碼檢查 (Biome) |
-| `just fmt` | 自動格式化程式碼 |
-| `just test` | 執行單元測試 |
-| `just dev` | 以熱重載模式啟動 `index.ts` |
+| `just fmt` | 修正程式碼格式 |
+| `just test` | 執行測試 |
+| `just build` | 建置專案 |
+| `just add-task <session> <goal>` | 新增任務 (CLI 接口) |
 
 ## 📁 專案結構
 
-- `src/agent.ts`: 核心 `BrowserAgent` 類別，處理瀏覽器生命週期與 AI 通訊。
-- `src/index.ts`: CLI 進入點。
+- `src/agents/`: 各類 Agent 實作 (Browser, Planer, Watchdog)。
+- `src/core/`: 核心邏輯 (Browser 控制, Queue, Types)。
+- `src/tui/`: TUI 介面實作 (BlessedApp, Components)。
+- `src/utils/`: 工具函式庫 (Config, Logger)。
 - `flake.nix`: NixOS 環境定義與 Chromium 自動路徑設定。
 - `Justfile`: 任務自動化腳本。
 - `AGENTS.md`: 提供給 AI Coding Agents 的開發指南。
