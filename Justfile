@@ -6,11 +6,11 @@ init:
 
 # 啟動 TUI 管理平台
 start:
-    bun src/index.tsx
+    bun src/index.ts
 
 # 啟動 UI 測試模式 (Fake Tasks)
 test-ui:
-    UI_TEST=true bun src/index.tsx
+    UI_TEST=true bun src/index.ts
 
 # 新增任務 (CLI 接口)
 add-task session goal:
@@ -30,4 +30,4 @@ test:
 
 # 建置專案
 build:
-    bun build ./src/index.tsx --outdir ./dist --target node
+    bun build ./src/index.ts --outdir ./dist --target node
