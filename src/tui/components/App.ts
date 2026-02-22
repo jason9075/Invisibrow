@@ -8,6 +8,7 @@ import { TaskArea } from './TaskArea';
 import { LogArea } from './LogArea';
 import { CommandBar } from './CommandBar';
 import { TaskInputModal } from './TaskInputModal';
+import { TaskDetailModal } from './TaskDetailModal';
 import { copyToClipboard, openUrl } from '../../utils/clipboard';
 import { eventBus, log } from '../../utils/logger';
 
@@ -22,6 +23,7 @@ export class App {
   logArea: LogArea;
   commandBar: CommandBar;
   taskInputModal: TaskInputModal;
+  taskDetailModal: TaskDetailModal;
   
   constructor(queueEngine: QueueEngine) {
     this.state = new AppState(queueEngine);
@@ -45,6 +47,7 @@ export class App {
     this.logArea = new LogArea(this.screen, logHeight, commandBarHeight);
     this.commandBar = new CommandBar(this.screen, commandBarHeight);
     this.taskInputModal = new TaskInputModal(this.screen);
+    this.taskDetailModal = new TaskDetailModal(this.screen);
     
     this.setupEvents();
     this.updateUI();
@@ -57,13 +60,6 @@ export class App {
     
     // Global key handler
     this.screen.on('keypress', (_ch, key) => {
-        // Modal active check? 
-        // Blessed doesn't have a global 'modal active' flag easily, 
-        // but since we focus the modal, maybe we can check focus.
-        // Or simpler: if modal is visible, ignore global keys?
-        // The modal's textarea captures keys when focused.
-        // However, we should be careful.
-        
         if (this.state.mode === 'execute' || this.state.mode === 'rename') return;
 
         if (this.state.mode === 'normal') {
@@ -180,6 +176,20 @@ export class App {
           const task = tasks[this.state.selectedTaskIdx];
           if (task && task.url) {
               openUrl(task.url);
+          }
+      }
+      if (key.name === 'enter') {
+          const task = tasks[this.state.selectedTaskIdx];
+          if (task) {
+              let content = `{bold}Goal:{/}\n${task.goal}\n\n`;
+              if (task.result) content += `{bold}Result:{/}\n${task.result}\n\n`;
+              if (task.url) content += `{bold}URL:{/}\n${task.url}\n\n`;
+              if (task.error) content += `{bold}{red-fg}Error:{/}\n${task.error}\n\n`;
+              
+              this.taskDetailModal.show(`Task Details (${task.status})`, content, () => {
+                  this.taskArea.widget.focus();
+                  this.screen.render();
+              });
           }
       }
   }
