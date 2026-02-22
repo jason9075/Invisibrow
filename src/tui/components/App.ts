@@ -7,6 +7,7 @@ import { TaskInfoArea } from './TaskInfoArea';
 import { TaskArea } from './TaskArea';
 import { LogArea } from './LogArea';
 import { CommandBar } from './CommandBar';
+import { TaskInputModal } from './TaskInputModal';
 import { copyToClipboard, openUrl } from '../../utils/clipboard';
 import { eventBus, log } from '../../utils/logger';
 
@@ -20,6 +21,7 @@ export class App {
   taskArea: TaskArea;
   logArea: LogArea;
   commandBar: CommandBar;
+  taskInputModal: TaskInputModal;
   
   constructor(queueEngine: QueueEngine) {
     this.state = new AppState(queueEngine);
@@ -42,6 +44,7 @@ export class App {
     this.taskArea = new TaskArea(this.screen, headerHeight, infoHeight, logHeight, commandBarHeight, sidebarWidth);
     this.logArea = new LogArea(this.screen, logHeight, commandBarHeight);
     this.commandBar = new CommandBar(this.screen, commandBarHeight);
+    this.taskInputModal = new TaskInputModal(this.screen);
     
     this.setupEvents();
     this.updateUI();
@@ -54,6 +57,13 @@ export class App {
     
     // Global key handler
     this.screen.on('keypress', (_ch, key) => {
+        // Modal active check? 
+        // Blessed doesn't have a global 'modal active' flag easily, 
+        // but since we focus the modal, maybe we can check focus.
+        // Or simpler: if modal is visible, ignore global keys?
+        // The modal's textarea captures keys when focused.
+        // However, we should be careful.
+        
         if (this.state.mode === 'execute' || this.state.mode === 'rename') return;
 
         if (this.state.mode === 'normal') {
@@ -251,7 +261,7 @@ export class App {
       }
   }
 
-  enterMode(newMode: 'execute' | 'rename') {
+  async enterMode(newMode: 'execute' | 'rename') {
       this.state.mode = newMode;
       const s = this.state.getCurrentSession();
       if (!s) return;
@@ -259,17 +269,26 @@ export class App {
       this.updateCommandBar();
       this.screen.render();
 
-      const initialValue = newMode === 'execute' ? '' : s.name;
-      this.commandBar.showInput(initialValue);
-      this.screen.render();
+      if (newMode === 'execute') {
+        const result = await this.taskInputModal.show();
+        if (result) {
+            this.handleInputSubmit(result);
+        } else {
+            this.handleInputCancel();
+        }
+      } else {
+        const initialValue = s.name;
+        this.commandBar.showInput(initialValue);
+        this.screen.render();
 
-      this.commandBar.onInput((err, value) => {
-          if (value !== undefined) {
-              this.handleInputSubmit(value);
-          } else {
-              this.handleInputCancel();
-          }
-      });
+        this.commandBar.onInput((err, value) => {
+            if (value !== undefined) {
+                this.handleInputSubmit(value);
+            } else {
+                this.handleInputCancel();
+            }
+        });
+      }
   }
 
   handleInputSubmit(value: string) {

@@ -61,7 +61,7 @@ export class CommandBar {
     }
     else if (mode === 'execute') {
       this.widget.style.border.fg = 'cyan';
-      this.widget.setContent(' {cyan-fg}{bold}GOAL:{/} ');
+      this.widget.setContent(' {cyan-fg}{bold}ACTIONS:{/} [Ctrl+S] Submit | [Ctrl+C] Clear | [Enter] Newline | [Esc] Cancel');
     }
     else if (mode === 'rename') {
       this.widget.style.border.fg = 'magenta';
