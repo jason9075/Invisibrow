@@ -1,5 +1,9 @@
 set shell := ["bash", "-cu"]
 
+# 顯示此幫助訊息
+default:
+    @just --list
+
 # 初始化環境
 init:
     bun install
