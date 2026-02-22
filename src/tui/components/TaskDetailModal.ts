@@ -20,7 +20,7 @@ export class TaskDetailModal {
         bg: 'black',
         fg: 'white'
       },
-      label: ' {bold}Task Details{/} (Esc/Enter: Close) ',
+      label: ' {bold}Task Details ',
       tags: true,
       hidden: true,
       shadow: true

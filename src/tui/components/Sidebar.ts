@@ -11,7 +11,7 @@ export class Sidebar {
       left: 0,
       width: width,
       height: `100%-${headerHeight + logHeight + commandBarHeight}`,
-      label: ' SESSIONS ',
+      label: ' Sessions ',
       border: { type: 'line' },
       style: {
         border: { fg: 'cyan' },
@@ -45,8 +45,8 @@ export class Sidebar {
     let uiIdx = 0;
 
     sortedDates.forEach(dateStr => {
-      const label = dateStr === today ? 'TODAY' : dateStr.toUpperCase();
-      sidebarItems.push(`{center}{yellow-fg}--- ${label} ---{/}{/}`);
+      const label = dateStr === today ? 'Today' : dateStr;
+      sidebarItems.push(`{center}{yellow-fg} ${label} {/}{/}`);
       
       groups[dateStr].forEach(s => {
         const prefix = sessionCount === selectedIdx ? '▶ ' : '  ';

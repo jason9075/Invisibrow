@@ -13,7 +13,7 @@ export class TaskArea {
       left: sidebarWidth,
       width: `100%-${sidebarWidth}`,
       height: `100%-${headerHeight + infoHeight + logHeight + commandBarHeight}`,
-      label: ' TASKS ',
+      label: ' Tasks ',
       border: { type: 'line' },
       style: {
         border: { fg: 'gray' },

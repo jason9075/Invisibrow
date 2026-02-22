@@ -14,7 +14,7 @@ export class Header {
     });
   }
 
-  update(sessionCount: number, taskCount: number) {
-    this.widget.setContent(` INVISIBROW TUI | SESSIONS: ${sessionCount} | TASKS: ${taskCount}`);
+  update(sessionCount: number, running: number, processed: number, total: number) {
+    this.widget.setContent(` InvisiBrow TUI | Sessions: ${sessionCount} | ${running}/${processed}/${total} Tasks`);
   }
 }

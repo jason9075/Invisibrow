@@ -10,7 +10,7 @@ export class LogArea {
       left: 0,
       width: '100%',
       height: logHeight,
-      label: ' LOGS ',
+      label: ' Logs ',
       border: { type: 'line' },
       style: { border: { fg: 'gray' } },
       tags: true,

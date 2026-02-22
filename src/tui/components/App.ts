@@ -346,8 +346,12 @@ export class App {
   }
 
   updateUI() {
-      const tasksTotal = this.state.queueEngine.getTasks().length;
-      this.header.update(this.state.sessions.length, tasksTotal);
+      const allTasks = this.state.queueEngine.getTasks();
+      const tasksTotal = allTasks.length;
+      const running = allTasks.filter(t => t.status === 'running').length;
+      const processed = allTasks.filter(t => ['completed', 'failed', 'cancelled'].includes(t.status)).length;
+      
+      this.header.update(this.state.sessions.length, running, processed, tasksTotal);
       this.sidebar.update(this.state.sessions, this.state.selectedSessionIdx, this.state.focusPane === 'sidebar');
       this.taskInfoArea.update(this.state.getCurrentSession(), this.state.getTasksForCurrentSession());
       this.taskArea.update(this.state.getTasksForCurrentSession(), this.state.selectedTaskIdx, this.state.focusPane === 'tasks');

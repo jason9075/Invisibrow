@@ -12,7 +12,7 @@ export class TaskInfoArea {
       left: sidebarWidth,
       width: `100%-${sidebarWidth}`,
       height: infoHeight,
-      label: ' SESSION INFO ',
+      label: ' Session Info ',
       border: { type: 'line' },
       style: { border: { fg: 'gray' } },
       tags: true

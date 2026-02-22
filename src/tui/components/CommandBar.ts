@@ -57,7 +57,7 @@ export class CommandBar {
       const stopAction = (selectedTask && selectedTask.status === 'running') ? ' | [s] Stop' : '';
       
       this.widget.style.border.fg = 'yellow';
-      this.widget.setContent(` {yellow-fg}{bold}ACTIONS:{/} [e] Execute | [r] Rename${stopAction} | [l] Login | [d] Delete | [Esc] Cancel`);
+      this.widget.setContent(` {yellow-fg}{bold}ACTIONS:{/} [e] Execute Task | [r] Rename${stopAction} | [l] Login | [d] Delete | [Esc] Cancel`);
     }
     else if (mode === 'execute') {
       this.widget.style.border.fg = 'cyan';
