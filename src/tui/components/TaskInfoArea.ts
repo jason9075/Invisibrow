@@ -24,11 +24,12 @@ export class TaskInfoArea {
       const id = session.id;
       const created = new Date(session.createdAt || Date.now()).toLocaleString();
       const updated = new Date(session.updatedAt).toLocaleString();
-      const stats = session.stats || { tokens: 0, cost: 0, contextSize: 0 };
-      
+      const stats = session.stats || { tokens: 0, cachedTokens: 0, cost: 0, lastPromptTokens: 0 };
+      const historyCount = session.sessionHistory?.length ?? 0;
+
       const infoText = [
         `{cyan-fg}ID:{/} ${id.padEnd(15)} {cyan-fg}Created:{/} ${created} {cyan-fg}Updated:{/} ${updated}`,
-        `{yellow-fg}Tokens:{/} ${stats.tokens.toLocaleString()} (Limit: 1M) | {yellow-fg}Cost:{/} $${stats.cost.toFixed(4)} | {yellow-fg}Context:{/} ${stats.contextSize} msgs`
+        `{yellow-fg}Tokens:{/} ${stats.tokens.toLocaleString()} ({green-fg}cached: ${stats.cachedTokens.toLocaleString()}{/}) | {yellow-fg}Cost:{/} $${stats.cost.toFixed(4)} | {yellow-fg}History:{/} ${historyCount} tasks`
       ].join('\n');
       this.widget.setContent(infoText);
     } else {

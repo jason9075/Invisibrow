@@ -38,9 +38,9 @@ export class CommandBar {
       this.widget.style.border.fg = 'gray';
       let content = '';
       if (focusPane === 'sidebar') {
-        content = ' [Tab] Switch to Tasks | [e] Actions | [n] New Session | [v] Toggle Headless | [j/k] Select | Ctrl+C Exit';
+        content = ' [Tab] Switch to Tasks | [e] Actions | [n] New Session | [v] Toggle Headless | [j/k] Select | [Ctrl+P] Commands | Ctrl+C Exit';
       } else {
-        content = ' [Tab] Switch to Sidebar | [y] Copy URL/Res | [r] Copy Result | [o] Open URL | [j/k] Select Task';
+        content = ' [Tab] Switch to Sidebar | [y] Copy URL/Res | [r] Copy Result | [o] Open URL | [j/k] Select Task | [Ctrl+P] Commands';
         const selectedTask = tasks[selectedTaskIdx];
         if (selectedTask && (selectedTask.url || selectedTask.result)) {
           content += ` | {yellow-fg}Click URL/Ans to Copy{/}`;
@@ -66,6 +66,14 @@ export class CommandBar {
     else if (mode === 'rename') {
       this.widget.style.border.fg = 'magenta';
       this.widget.setContent(' {magenta-fg}{bold}NAME:{/} ');
+    }
+    else if (mode === 'command_palette') {
+      this.widget.style.border.fg = 'cyan';
+      this.widget.setContent(' {cyan-fg}{bold}COMMAND PALETTE:{/} [j/k] 選擇  [Enter] 確認  [Esc] 關閉');
+    }
+    else if (mode === 'keyword_manager') {
+      this.widget.style.border.fg = 'yellow';
+      this.widget.setContent(' {yellow-fg}{bold}KEYWORD 管理:{/} [a] 新增  [d] 刪除  [j/k] 移動  [Esc] 關閉');
     }
   }
 

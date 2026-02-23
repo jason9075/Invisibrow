@@ -1,9 +1,11 @@
 import blessed from 'blessed';
+import { copyToClipboard } from '../../utils/clipboard';
 
 export class TaskDetailModal {
   widget: blessed.Widgets.BoxElement;
   contentBox: blessed.Widgets.BoxElement;
   screen: blessed.Widgets.Screen;
+  private rawContent: string = '';
 
   constructor(screen: blessed.Widgets.Screen) {
     this.screen = screen;
@@ -52,13 +54,20 @@ export class TaskDetailModal {
     this.contentBox.key(['escape', 'enter', 'q'], () => {
       this.close();
     });
+
+    this.contentBox.key(['y'], () => {
+      // 去除 blessed color/bold/style tags，保留純文字
+      const plain = this.rawContent.replace(/\{[^}]+\}/g, '');
+      copyToClipboard(plain);
+    });
   }
 
   private onClose?: () => void;
 
   show(title: string, content: string, onClose?: () => void) {
     this.onClose = onClose;
-    this.widget.setLabel(` {bold}${title}{/} (Esc/Enter: Close) `);
+    this.rawContent = content;
+    this.widget.setLabel(` {bold}${title}{/} (Esc: Close, y: Copy) `);
     this.contentBox.setContent(content);
     this.widget.show();
     this.widget.setFront();

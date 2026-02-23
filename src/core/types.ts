@@ -1,3 +1,5 @@
+export type { TokenUsage } from '../utils/message-logger';
+
 export interface A2APart {
   kind: 'text' | 'image' | 'json';
   text?: string;
@@ -44,6 +46,12 @@ export interface AgentResponse<T = any> {
   status: 'success' | 'failed' | 'intervention';
   data: T;
   message?: string;
+}
+
+export interface BrowserResult {
+  summary: string;
+  extracted: Record<string, any>;
+  url: string;
 }
 
 export interface PlanerStep {

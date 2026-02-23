@@ -1,8 +1,20 @@
 import fs from 'fs';
 import path from 'path';
 import { QueueEngine } from '../../core/queue';
-import { log } from '../../utils/logger';
-import { PersistedSession, UIMode, FocusPane } from '../types';
+import { log, eventBus } from '../../utils/logger';
+import { PersistedSession, UIMode, FocusPane, SessionStats } from '../types';
+import type { TokenUsage } from '../../core/types';
+import { estimateCost } from '../../utils/pricing';
+
+/** 各 model 的 context window 大小（tokens） */
+const MODEL_CONTEXT_WINDOW: Record<string, number> = {
+  'gpt-4o':      128_000,
+  'gpt-4o-mini': 128_000,
+};
+
+function getContextWindow(model: string): number {
+  return MODEL_CONTEXT_WINDOW[model] ?? 128_000;
+}
 
 export class AppState {
   // Data
@@ -128,6 +140,45 @@ export class AppState {
       this.saveSessions();
       log(`[TUI] Session ${s.id} headless: ${s.headless}`);
     }
+  }
+
+  /**
+   * 提交任務到 QueueEngine，注入 sessionHistory 與 token 累積 callbacks。
+   */
+  async submitTask(sessionId: string, goal: string): Promise<string> {
+    return this.queueEngine.addTask(sessionId, goal, {
+      getSessionHistory: () => {
+        const session = this.sessions.find(s => s.id === sessionId);
+        return session?.sessionHistory ?? [];
+      },
+      onTokenUsage: (usage: TokenUsage) => {
+        const session = this.sessions.find(s => s.id === sessionId);
+        if (!session) return;
+
+        if (!session.stats) {
+          session.stats = { tokens: 0, cachedTokens: 0, cost: 0, lastPromptTokens: 0 };
+        }
+        session.stats.tokens += usage.promptTokens + usage.completionTokens;
+        session.stats.cachedTokens += usage.cachedTokens;
+        session.stats.cost += estimateCost(usage);
+        session.stats.lastPromptTokens = usage.promptTokens;
+        session.updatedAt = new Date().toISOString();
+
+        // 存檔 + 通知 TUI 更新 Header
+        this.saveSessions();
+        eventBus.emit('session:stats-updated', sessionId);
+      },
+      onSessionHistoryUpdate: (entry: string) => {
+        const session = this.sessions.find(s => s.id === sessionId);
+        if (!session) return;
+
+        if (!session.sessionHistory) session.sessionHistory = [];
+        session.sessionHistory.push(entry);
+        session.updatedAt = new Date().toISOString();
+        this.saveSessions();
+        log(`[AppState] Session ${sessionId} history updated (+1 entry)`);
+      },
+    });
   }
 
   addLog(message: string) {

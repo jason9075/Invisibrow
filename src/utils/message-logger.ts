@@ -3,6 +3,17 @@ import fs from 'fs';
 import os from 'os';
 import { log } from './logger';
 
+export interface TokenUsage {
+  /** prompt_tokens（含 cached） */
+  promptTokens: number;
+  /** completion_tokens */
+  completionTokens: number;
+  /** prompt_tokens_details.cached_tokens（命中 OpenAI Prompt Cache 的部分） */
+  cachedTokens: number;
+  /** 使用的 model 名稱，用於計算成本 */
+  model: string;
+}
+
 export interface MessageLogRecord {
   timestamp: string;
   session_id: string;
@@ -15,6 +26,7 @@ export interface MessageLogRecord {
     usage: {
       input_tokens: number;
       output_tokens: number;
+      cached_tokens: number;
     };
   };
 }
@@ -22,7 +34,16 @@ export interface MessageLogRecord {
 export class MessageLogger {
   private static storageBase = path.join(os.homedir(), '.local', 'share', 'invisibrow', 'storage', 'message');
 
-  static async log(record: MessageLogRecord) {
+  static async log(record: MessageLogRecord, onTokenUsage?: (usage: TokenUsage) => void) {
+    // 即時回呼，讓 QueueEngine 累積 session stats
+    if (onTokenUsage) {
+      onTokenUsage({
+        promptTokens: record.response.usage.input_tokens,
+        completionTokens: record.response.usage.output_tokens,
+        cachedTokens: record.response.usage.cached_tokens,
+        model: record.model,
+      });
+    }
     try {
       const dirPath = path.join(this.storageBase, record.session_id, record.agent_type);
       if (!fs.existsSync(dirPath)) {

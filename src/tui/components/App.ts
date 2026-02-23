@@ -9,8 +9,12 @@ import { LogArea } from './LogArea';
 import { CommandBar } from './CommandBar';
 import { TaskInputModal } from './TaskInputModal';
 import { TaskDetailModal } from './TaskDetailModal';
+import { CommandPaletteModal } from './CommandPaletteModal';
+import { KeywordManagerModal } from './KeywordManagerModal';
 import { copyToClipboard, openUrl } from '../../utils/clipboard';
 import { eventBus, log } from '../../utils/logger';
+import { memoryService } from '../../core/memory';
+import { formatCost } from '../../utils/pricing';
 
 export class App {
   screen: blessed.Widgets.Screen;
@@ -24,6 +28,8 @@ export class App {
   commandBar: CommandBar;
   taskInputModal: TaskInputModal;
   taskDetailModal: TaskDetailModal;
+  commandPaletteModal: CommandPaletteModal;
+  keywordManagerModal: KeywordManagerModal;
   
   constructor(queueEngine: QueueEngine) {
     this.state = new AppState(queueEngine);
@@ -48,6 +54,8 @@ export class App {
     this.commandBar = new CommandBar(this.screen, commandBarHeight);
     this.taskInputModal = new TaskInputModal(this.screen);
     this.taskDetailModal = new TaskDetailModal(this.screen);
+    this.commandPaletteModal = new CommandPaletteModal(this.screen);
+    this.keywordManagerModal = new KeywordManagerModal(this.screen, memoryService);
     
     this.setupEvents();
     this.updateUI();
@@ -57,10 +65,29 @@ export class App {
 
   setupEvents() {
     this.screen.key(['C-c'], () => process.exit(0));
+
+    // 即時更新 Header token stats（不需要等 150ms interval）
+    eventBus.on('session:stats-updated', (sessionId: string) => {
+      const current = this.state.getCurrentSession();
+      if (current?.id === sessionId) {
+        this.updateUI();
+      }
+    });
+
+    // Ctrl+P — 全域開啟 Command Palette（任何 mode 皆可觸發，除了文字輸入 mode）
+    this.screen.key(['C-p'], () => {
+      if (this.state.mode === 'execute' || this.state.mode === 'rename') return;
+      this.openCommandPalette();
+    });
     
     // Global key handler
     this.screen.on('keypress', (_ch, key) => {
-        if (this.state.mode === 'execute' || this.state.mode === 'rename') return;
+        if (
+          this.state.mode === 'execute' ||
+          this.state.mode === 'rename' ||
+          this.state.mode === 'command_palette' ||
+          this.state.mode === 'keyword_manager'
+        ) return;
 
         if (this.state.mode === 'normal') {
             this.handleNormalMode(key);
@@ -89,6 +116,14 @@ export class App {
         this.state.addLog(data.message);
         this.logArea.update(this.state.logs);
         this.screen.render();
+    });
+
+    eventBus.on('verification_needed', (data: { sessionId: string; reason?: string; url?: string }) => {
+        const session = this.state.sessions.find((s) => s.id === data.sessionId);
+        if (!session) return;
+        session.isVerifying = true;
+        log(`[TUI] ${session.name} 需要人工介入: ${data.reason || data.url || '驗證碼/登入'}`);
+        this.updateUI();
     });
   }
 
@@ -181,10 +216,34 @@ export class App {
       if (key.name === 'enter') {
           const task = tasks[this.state.selectedTaskIdx];
           if (task) {
-              let content = `{bold}Goal:{/}\n${task.goal}\n\n`;
-              if (task.result) content += `{bold}Result:{/}\n${task.result}\n\n`;
-              if (task.url) content += `{bold}URL:{/}\n${task.url}\n\n`;
-              if (task.error) content += `{bold}{red-fg}Error:{/}\n${task.error}\n\n`;
+              let content = `{yellow-fg}{bold}Goal:{/}\n${task.goal}\n\n`;
+
+              if (task.steps && task.steps.length > 0) {
+                  content += `{yellow-fg}{bold}Steps:{/}\n`;
+                  for (const s of task.steps) {
+                      const agentLabel = s.agent === 'planer' ? '[P]' : '[B]';
+                      let tokenStr = '';
+                      if (s.tokenUsage) {
+                        const { inputTokens, cachedTokens, outputTokens, cost } = s.tokenUsage;
+                        tokenStr = ` {green-fg}(I:${inputTokens.toLocaleString()} C:${cachedTokens.toLocaleString()} O:${outputTokens.toLocaleString()} ${formatCost(cost)}){/}`;
+                      }
+                      content += `  ${agentLabel} ${s.step}. {bold}${s.command}{/} — ${s.thought}${tokenStr}\n`;
+                  }
+                  content += '\n';
+              }
+
+              if (task.result) content += `{yellow-fg}{bold}Result:{/}\n${task.result}\n\n`;
+              if (task.url) content += `{yellow-fg}{bold}URL:{/}\n{blue-fg}${task.url}{/}\n\n`;
+              if (task.error) content += `{yellow-fg}{bold}Error:{/}\n{red-fg}${task.error}{/}\n\n`;
+
+              if (task.tokenUsage) {
+                const { inputTokens, cachedTokens, outputTokens } = task.tokenUsage;
+                content += `{yellow-fg}{bold}Token Usage:{/}\n`;
+                content += `  Input:   ${inputTokens.toLocaleString()}\n`;
+                content += `  Cached:  {green-fg}${cachedTokens.toLocaleString()}{/}\n`;
+                content += `  Output:  ${outputTokens.toLocaleString()}\n`;
+                content += `  Total:   {bold}${(inputTokens + outputTokens).toLocaleString()}{/}\n\n`;
+              }
               
               this.taskDetailModal.show(`Task Details (${task.status})`, content, () => {
                   this.taskArea.widget.focus();
@@ -213,7 +272,7 @@ export class App {
       }
       if (key.name === 'l') {
           const s = this.state.getCurrentSession();
-          if (s) this.state.queueEngine.addTask(s.id, 'MANUAL_LOGIN');
+          if (s) this.state.submitTask(s.id, 'MANUAL_LOGIN');
           this.state.mode = 'normal';
           this.updateUI();
       }
@@ -320,7 +379,7 @@ export class App {
                   this.updateUI();
               }
               
-              this.state.queueEngine.addTask(s.id, value);
+              this.state.submitTask(s.id, value);
           } else if (this.state.mode === 'rename') {
               const oldName = s.name;
               s.name = value;
@@ -351,7 +410,13 @@ export class App {
       const running = allTasks.filter(t => t.status === 'running').length;
       const processed = allTasks.filter(t => ['completed', 'failed', 'cancelled'].includes(t.status)).length;
       
-      this.header.update(this.state.sessions.length, running, processed, tasksTotal);
+      this.header.update(
+        this.state.sessions.length,
+        running,
+        processed,
+        tasksTotal,
+        this.state.getCurrentSession()?.stats,
+      );
       this.sidebar.update(this.state.sessions, this.state.selectedSessionIdx, this.state.focusPane === 'sidebar');
       this.taskInfoArea.update(this.state.getCurrentSession(), this.state.getTasksForCurrentSession());
       this.taskArea.update(this.state.getTasksForCurrentSession(), this.state.selectedTaskIdx, this.state.focusPane === 'tasks');
@@ -368,5 +433,38 @@ export class App {
           this.state.getTasksForCurrentSession(),
           this.state.selectedTaskIdx
       );
+  }
+
+  /**
+   * 開啟 Command Palette，等待使用者選擇後路由到對應功能
+   */
+  async openCommandPalette() {
+    this.state.mode = 'command_palette';
+    this.updateUI();
+
+    const action = await this.commandPaletteModal.show();
+
+    if (action === 'keyword_manager') {
+      await this.openKeywordManager();
+    } else {
+      // 使用者取消
+      this.state.mode = 'normal';
+      this.updateUI();
+      this.sidebar.widget.focus();
+    }
+  }
+
+  /**
+   * 開啟 Keyword 管理 Modal
+   */
+  async openKeywordManager() {
+    this.state.mode = 'keyword_manager';
+    this.updateUI();
+
+    await this.keywordManagerModal.show(() => {
+      this.state.mode = 'normal';
+      this.updateUI();
+      this.sidebar.widget.focus();
+    });
   }
 }
